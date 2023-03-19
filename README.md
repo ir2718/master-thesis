@@ -40,7 +40,7 @@ The subtasks needed to solve this problem:
 
 - verification:
   1. FEVER
-  2. Climate Fever
+  2. SciFact
   
 ### Baselines:
 - each baseline was trained on 20 epochs
