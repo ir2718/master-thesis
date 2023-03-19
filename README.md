@@ -34,30 +34,25 @@ The subtasks needed to solve this problem:
        - using attention weights, logic-based explanation or summarization by generating explanations
        
 ### Datasets
-1. claim detection datasets:
-  - CredBank 
-    - Likert scale like, 5 classes ranging from certainly inaccurate to certainly accurate
-    - text from Twitter posts
+- checkworthiness:
+  1. CLEF2023 CheckThat! Task 1: Check-Worthiness in Multimodal and Unimodal Content (CT23)
+  2. CLEF2021 CheckThat! Task 1: Check-Worthiness Estimation (CT21)
 
-  - Weibo
-    - 2 classes, rumorous and non-rumorous
-    - text from Twitter posts
-
- - PHEME
-    - 3 classes, true, false and unverified
-    - complicated scheme for annotation of comments on posts - defines support or response type, certainty and evidentiality
-    - text from Twitter posts regarding certain events in time
- 
- - RumourEval19
-    - 3 classes, true, false and unverified
-    - text from Twitter and Reddit posts
- 
- - DAST
-    - 3 classes, true, false and unverified
-    - exclusively Reddit posts
-
-2. factual verification datasets with natural inputs:
-    - TODO
+- verification:
+  1. FEVER
+  2. Climate Fever
   
-3. factual verification datasets with artificial inputs:
-    - TODO
+### Baselines:
+- each baseline was trained on 20 epochs
+
+| Model     | Dataset         | learning rate | batch size | weight decay | F1 score | Best @ epoch |
+| --------- | --------------- | ------------- | ---------- | ------------ | -------- | ------------ |
+| BERT      | CT23            | 2e-5          | 32         | 1e-2         | 0.758    | 19           |
+| RoBERTa   | CT23            | 2e-5          | 32         | 1e-2         | 0.770    | 4            |
+| BERT      | CT21            | 2e-5          | 32         | 1e-2         | 0.701    | 8            |
+| RoBERTa   | CT21            | 2e-5          | 32         | 1e-2         | 0.758    | 7            |
+| BERT      | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
+| RoBERTa   | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
+| BERT      | SciFact         | 2e-5          | 32         | 1e-2         |          |              |
+| RoBERTa   | SciFact         | 2e-5          | 32         | 1e-2         |          |              |
+
