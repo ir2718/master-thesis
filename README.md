@@ -34,6 +34,7 @@ The subtasks needed to solve this problem:
        - using attention weights, logic-based explanation or summarization by generating explanations
        
 ### Datasets
+- only checkworthiness and verification will be covered in this thesis
 - checkworthiness:
   1. CLEF2023 CheckThat! Task 1: Check-Worthiness in Multimodal and Unimodal Content (CT23)
   2. CLEF2021 CheckThat! Task 1: Check-Worthiness Estimation (CT21)
