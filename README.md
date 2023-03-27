@@ -41,7 +41,7 @@ The subtasks needed to solve this problem:
 
 - verification:
   1. FEVER
-  2. SciFact
+  2. TBD
   
 ### Baselines:
 - each baseline was trained on 20 epochs
