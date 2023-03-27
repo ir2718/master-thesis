@@ -54,6 +54,6 @@ The subtasks needed to solve this problem:
 | RoBERTa   | CT21            | 2e-5          | 32         | 1e-2         | 0.758    | 7            |
 | BERT      | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
 | RoBERTa   | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
-| BERT      | SciFact         | 2e-5          | 32         | 1e-2         |          |              |
-| RoBERTa   | SciFact         | 2e-5          | 32         | 1e-2         |          |              |
+| BERT      | TBD             | 2e-5          | 32         | 1e-2         |          |              |
+| RoBERTa   | TBD             | 2e-5          | 32         | 1e-2         |          |              |
 
