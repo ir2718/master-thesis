@@ -1,9 +1,16 @@
 import pandas as pd
 import os
 from datasets import DatasetDict, Dataset, load_dataset
+from transformers import (
+    BertTokenizer, 
+    ElectraTokenizer,
+    BertConfig,
+    ElectraConfig
+)
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 from ast import literal_eval
+import torch
 
 # every dataset is loaded as a huggingface dataset
 
@@ -82,14 +89,28 @@ def _load_FEVER_dataset(path=os.path.join("./data", "verification", "fever"), sa
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
-def collate_fn(examples, **kwargs):
-    if kwargs["tokenizer"]._pad_token is None:
-        return pad_sequence(examples, batch_first=True)
-        
-    return pad_sequence(
-        examples, batch_first=True, padding_value=kwargs["tokenizer"].pad_token_id
-    )
 
-if __name__ == "__main__": # for testing
-    #_load_CT23_dataset()
-    _load_FEVER_dataset()
+def _get_tokenizer(type_):
+    d = {
+        "vanilla_wwm": (BertTokenizer, BertConfig),
+        "electra": (ElectraTokenizer, ElectraConfig)
+    }
+    return d[type_]
+
+class PretrainingCollator:
+    def __init__(self, model_name, type_):
+        tokenizer, config = _get_tokenizer(type_)
+        self.config = config()
+        self.tokenizer = tokenizer.from_pretrained(
+            model_name, config=self.config
+        )
+
+    def collate_fn(self, examples):
+        tokenized_examples = self.tokenizer(
+            examples, padding=True, truncation=True, return_tensors="pt"
+        )
+        return tokenized_examples
+
+# if __name__ == "__main__": # for testing
+#     #_load_CT23_dataset()
+#     _load_FEVER_dataset()

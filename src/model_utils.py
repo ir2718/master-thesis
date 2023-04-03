@@ -4,6 +4,7 @@ from transformers import (
     get_cosine_schedule_with_warmup, 
     get_linear_schedule_with_warmup
 )
+import torch
 
 def load_hf_model(model_name, num_labels, **kwargs):
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -24,8 +25,8 @@ def get_optimizer(model, optimizer_name, **kwargs):
     }
     return MAPPING_OPTIMIZER[optimizer_name](model.parameters())
 
-def get_scheduler(optimizer, scheduler_name, **kwargs):
-    warmup_steps = int(kwargs["num_steps"] * kwargs["warmup_ratio"])
+def get_scheduler(optimizer, scheduler_name, num_steps, warmup_ratio):
+    warmup_steps = int(num_steps * warmup_ratio)
     d = {
         "cosine": lambda x: get_cosine_schedule_with_warmup(
             x, num_warmup_steps=warmup_steps, num_training_steps=num_steps
@@ -36,13 +37,13 @@ def get_scheduler(optimizer, scheduler_name, **kwargs):
     }
     return d[scheduler_name](optimizer)
 
-def add_special_tokens(model, tokenizer, type_):
-    if type_ == "checkworthiness":
-        return tokenizer
-
-    special_tokens_dict = {
-        "additional_special_tokens": ["[SEP_EVIDENCE]", "[SEP_ENT]", "[SEP_NUM]", "[SEP_EVIDENCE_SENT]"]
-    }
-    num_added_toks = tokenizer.add_special_tokens(special_tokens_dict)
-    model.resize_token_embeddings(len(tokenizer))
-    return tokenizer
+# def add_special_tokens(model, tokenizer, type_):
+#     if type_ == "checkworthiness":
+#         return tokenizer
+#
+#     special_tokens_dict = {
+#         "additional_special_tokens": ["[SEP_EVIDENCE]", "[SEP_ENT]", "[SEP_NUM]", "[SEP_EVIDENCE_SENT]"]
+#     }
+#     num_added_toks = tokenizer.add_special_tokens(special_tokens_dict)
+#     model.resize_token_embeddings(len(tokenizer))
+#     return tokenizer
