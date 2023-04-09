@@ -36,7 +36,7 @@ The subtasks needed to solve this problem:
 
 - verification:
   1. FEVER
-  2. TBD
+  2. Climate FEVER
   
 ### Baselines:
 - each baseline was trained on 20 epochs
@@ -49,6 +49,6 @@ The subtasks needed to solve this problem:
 | RoBERTa   | CT21            | 2e-5          | 32         | 1e-2         | 0.758    | 7            |
 | BERT      | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
 | RoBERTa   | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
-| BERT      | TBD             | 2e-5          | 32         | 1e-2         |          |              |
-| RoBERTa   | TBD             | 2e-5          | 32         | 1e-2         |          |              |
+| BERT      | Climate FEVER   | 2e-5          | 32         | 1e-2         |          |              |
+| RoBERTa   | Climate FEVER   | 2e-5          | 32         | 1e-2         |          |              |
 
