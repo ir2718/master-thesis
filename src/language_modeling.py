@@ -12,7 +12,7 @@ from transformers import (
     AutoTokenizer
 )
 from torch.utils.data import DataLoader
-from torch.nn.functional import cross_entropy
+from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits, gumbel_softmax
 from src.pretraining_dataset import get_dataset
 from abc import ABC, abstractmethod
 from tqdm import tqdm
@@ -21,8 +21,9 @@ import torch
 
 def get_LM_head(model_name, pretrain_type):
     d = {
-        "vanilla_wwm": VanillaWholeWordMaskedLMHead,
-        "electra": ElectraLMHead,
+        "wwm_mlm": WholeWordMaskedLMHead,
+        "wwm_electra": ElectraLMHead,
+        "shuffle_random": ShuffleRandomLMHead,
     }
     return d[pretrain_type]
 
@@ -57,6 +58,7 @@ class MultiTaskModel(nn.Module):
         for type_ in modeling_types:
             lm_constr = get_LM_head(model_name=pretrained_model_name, pretrain_type=type_)
             h = lm_constr(
+                self,
                 pretrained_model_name,
                 tokenizer=self.tokenizer,
                 config=self.config,
@@ -73,11 +75,11 @@ class MultiTaskModel(nn.Module):
     def forward_head(self, inputs, head):
         # do on cpu
         x, y = head.mask_tokens(inputs)
-        inputs["input_ids"] = x
 
         # switch to gpu
         inputs = {k:v.to(self.device) for k, v in inputs.items()}
         y = y.to(self.device)
+        
 
         out = self.model(**inputs)[0]
         out = head(out)
@@ -92,10 +94,11 @@ class MultiTaskModel(nn.Module):
         for h in self.heads:
             _, y, out = self.forward_head(inputs, h)
             l = h.get_loss(out, y)
-
+            
             losses.append(l)
             outputs.append(out)
             labels.append(y)
+
 
         losses = torch.stack(losses)
         outputs = torch.stack(outputs)
@@ -108,7 +111,15 @@ class MultiTaskModel(nn.Module):
     def _calculate_accuracy(self, d, x, y):
         for i, (xi, yi) in enumerate(zip(x, y)):
             yi = yi.reshape(-1)
-            preds = torch.argmax(xi.view(-1, self.tokenizer.vocab_size), dim=-1)
+    
+            # in case of multiclass problem such as mlm  
+            if len(xi.shape) != 2:
+                preds = torch.argmax(xi.view(-1, xi.shape[-1]), dim=-1)
+            else:
+                preds = xi.view(-1) > 0 # unnormalized logits!
+            
+            print(preds.shape, yi.shape)
+            
             equal = (preds == yi)[yi != -100].float()
             d[self.heads[i].get_name()].append(equal.mean())
         return d
@@ -156,16 +167,8 @@ class MultiTaskModel(nn.Module):
                     
                     # if its the best model so far
                     if val_losses[-1] == min(val_losses):
-                        self.save_backbone(step)
+                        self.save_model_and_heads(step)
                     
-
-    def save_backbone(self, step):
-        save_path = f"./pretrained_models/{self.experiment_name}_{step}"
-        torch.save(self.model, save_path)
-        print()
-        print(f"Saved the model to {save_path}")
-        print()
-
     def val_step(self, validation_loaders):
         self.eval()
 
@@ -213,6 +216,16 @@ class MultiTaskModel(nn.Module):
             print("    Acc  - {:.5f} => {}".format(accs[k][-1].mean(), k))
         print()
 
+    def save_model_and_heads(self, step):
+        save_path = f"./pretrained_models/backbone_{self.experiment_name}_{step}"
+        torch.save(self.model, save_path)
+        print()
+        print(f"Saved the backbone to {save_path}")
+        print()
+        for h in self.heads:
+            h.save_head(step)
+
+
 class BaseLMHead(ABC, nn.Module):
     def __init__(self, head_model_name, config, tokenizer):
         super().__init__()
@@ -231,17 +244,22 @@ class BaseLMHead(ABC, nn.Module):
     def forward(self, x):
         return self.head(x)
 
-    # the default loss function for masked language modeling, override if needed
+    @abstractmethod
     def get_loss(self, x, y):
-        # this is why -100 is used for tokens that dont go into loss
-        masked_lm_loss = cross_entropy(
-            x.view(-1, self.tokenizer.vocab_size), y.view(-1), ignore_index=-100
-        )
-        return masked_lm_loss
+        pass
 
-class VanillaWholeWordMaskedLMHead(BaseLMHead):
+    @abstractmethod
+    def save_head(self, steps):
+        pass
 
-    def __init__(self, head_model_name, **kwargs):
+
+###################################################################################################
+
+
+
+class WholeWordMaskedLMHead(BaseLMHead):
+
+    def __init__(self, multi_task_model, head_model_name, **kwargs):
         super().__init__(head_model_name, **kwargs)
         self.config = BertConfig.from_pretrained(head_model_name)
         self.tokenizer = BertTokenizer.from_pretrained(head_model_name)
@@ -325,7 +343,8 @@ class VanillaWholeWordMaskedLMHead(BaseLMHead):
             padding_value=self.tokenizer.pad_token_id
         )
 
-        inputs, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
+        input_ids_new, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
+        inputs["input_ids"] = input_ids_new
 
         return inputs, labels
 
@@ -366,11 +385,35 @@ class VanillaWholeWordMaskedLMHead(BaseLMHead):
         # 10% of the time do nothing
         return inputs, labels
 
+    # the default loss function for masked language modeling
+    def get_loss(self, x, y):
+        # this is why -100 is used for tokens that dont go into loss
+        masked_lm_loss = cross_entropy(
+            x.view(-1, self.tokenizer.vocab_size), y.view(-1), ignore_index=-100
+        )
+        return masked_lm_loss
+    
+    def save_head(self, step):
+        save_path = f"./pretrained_models/mlm_head_{self.experiment_name}_{step}"
+        torch.save(self.model, save_path)
+        print()
+        print(f"Saved the MLML head to {save_path}")
+        print()
+
+
+
+###################################################################################################
+
+
+
 class ElectraLMHead(BaseLMHead):
 
-    def __init__(self, head_model_name, **kwargs):
+    GEN_WEIGHT = 1.0
+    DISC_WEIGHT = 50.0
+
+    def __init__(self, multi_task_model, head_model_name, **kwargs):
         super().__init__(head_model_name, **kwargs)
-        gen_name = "google/electra-small-generator"
+        gen_name = "google/electra-base-generator"
         self.config = ElectraConfig.from_pretrained(gen_name)
         self.tokenizer = AutoTokenizer.from_pretrained(gen_name)
         self.gen_head = ElectraForMaskedLM.from_pretrained(
@@ -383,9 +426,18 @@ class ElectraLMHead(BaseLMHead):
             disc_name,
             config=ElectraConfig.from_pretrained(disc_name)
         ).discriminator_predictions
-
+        self._tie_weights(multi_task_model)
+        
+        self.gumbel = torch.distributions.gumbel.Gumbel(0., 1.)
         self.wwm_probability = 0.15
         self.name = "electra"
+
+    def _tie_weights(self, multi_task_model):
+        multi_task_model.model.embeddings = self.gen_head.electra.embeddings
+        self.gen_head.generator_lm_head.weight = self.gen_head.electra.embeddings.word_embeddings.weight
+
+    def forward(self, x):
+        return self.disc_head(x)
 
     def _whole_word_mask(self, input_tokens, max_predictions=512):
         cand_indexes = []
@@ -472,19 +524,11 @@ class ElectraLMHead(BaseLMHead):
         # 15% of the time do nothing
         return inputs, labels, indices_replaced
 
-    def _generate_new_tokens(self, inputs, indices_replaced):
-        with torch.no_grad():
-            inputs = {k: v.to(self.gen_head.device) for k, v in inputs.items()}
-            out = self.gen_head(**inputs)[0]
-            preds = out.argmax(dim=-1).cpu()
-
+    def _generate_new_tokens_logits(self, inputs):
+        inputs = {k: v.to(self.gen_head.device) for k, v in inputs.items()}
+        out = self.gen_head(**inputs)[0]
         inputs = {k: v.cpu() for k, v in inputs.items()}
-        inputs["input_ids"].masked_scatter_(
-            indices_replaced, preds.masked_select(indices_replaced)
-        )
-
-        indices_replaced = indices_replaced.int()
-        return inputs, indices_replaced
+        return inputs, out
 
     def mask_tokens(self, inputs):
         mask_labels = []
@@ -507,28 +551,217 @@ class ElectraLMHead(BaseLMHead):
         inputs_masked, labels, indices_replaced = self._mask_tokens(
             inputs["input_ids"], batch_mask
         )
+        # possible optimization: filter all examples where labels in row are all false
+        # these dont have to go through the generator at all
 
+        
         # create example for discriminator
         input_to_gen = inputs.copy()
         input_to_gen["input_ids"] = inputs_masked
 
-        self.input_to_gen = input_to_gen.copy()
+        # run generator forward pass
+        inputs_new, gen_out = self._generate_new_tokens_logits(input_to_gen)
+        self.gen_out = gen_out.cpu()
+        self.gen_labels = labels.clone()
 
-        # generate new tokens where [MASK] is
-        inputs_new, indices_replaced_new = self._generate_new_tokens(input_to_gen, indices_replaced)
+        tokens_new, labels_new = self._sample_tokens(inputs_new, labels, indices_replaced)
 
-        # get indices of [PAD] token
-        padding_mask = torch.ones_like(indices_replaced)
-        padding_mask[inputs_new["input_ids"] != self.tokenizer.pad_token_id] = 0
-
-        # fill indices replaced mask with -100 where [PAD] token was, isn't used in loss
-        labels_new = indices_replaced_new.masked_fill(padding_mask, -100)
-
-        print(inputs["input_ids"][0])
-
-        exit(0)
-
+        # get mask for [PAD] tokens and fill labels with -100 where [PAD] token was
+        # these tokens aren't calculated in loss
+        padding_mask = torch.ones_like(labels_new).bool()
+        padding_mask[inputs_new["input_ids"] != self.tokenizer.pad_token_id] = False
+        labels_new.masked_fill_(padding_mask.bool(), -100)
+        
         return inputs_new, labels_new
+
+    def _sample_tokens(self, inputs_new, labels, indices_replaced):
+        
+        with torch.no_grad():
+            # sample new tokens using gumbel softmax
+            gen_out_masked = self.gen_out[indices_replaced, :]
+            preds = (gen_out_masked + self.gumbel.sample(gen_out_masked.shape)).argmax(dim=-1)
+            generated = inputs_new["input_ids"].clone()
+
+            generated[indices_replaced] = preds
+            
+            # produce labels for discriminator
+            # loss isnt calculated on tokens that the generator guessed
+            is_replaced = indices_replaced.clone()
+            is_replaced[indices_replaced] = (preds != labels[indices_replaced])
+
+        return generated, is_replaced.float()
+
+    def get_loss(self, x, y):
+        # calculate generator loss only over tokens different from the original
+        gen_out_flat = self.gen_out.view(-1, self.tokenizer.vocab_size)
+        gen_label_flat = self.gen_labels.view(-1)
+        gen_loss = cross_entropy(gen_out_flat, gen_label_flat, ignore_index=-100)
+
+        # calculate discriminator loss only over masked tokens
+        mask = y != -100
+        disc_loss = binary_cross_entropy_with_logits(x[mask], y[mask])
+
+        # the original paper uses gen_weight=1.0 and disc_weight=50.0
+        total_loss = ElectraLMHead.GEN_WEIGHT * gen_loss + ElectraLMHead.DISC_WEIGHT * disc_loss
+        
+        return total_loss
+
+    def save_head(self, step):
+        save_path_gen = f"./pretrained_models/mlm_head_{self.experiment_name}_{step}"
+        torch.save(self.gen_head, save_path_gen)
+        print()
+        print(f"Saved the generative model to {save_path_gen}")
+        print()
+
+        save_path_disc = f"./pretrained_models/disc_head_{self.experiment_name}_{step}"
+        torch.save(self.gen_head, save_path_disc)
+        print()
+        print(f"Saved the discriminator head to {save_path_disc}")
+        print()
+
+
+
+###################################################################################################
+
+
+class ShuffleRandomLMHead(BaseLMHead):
+    
+    NUM_CLASSES = 3
+        
+    def __init__(self, multi_task_model, head_model_name, **kwargs):
+        super().__init__(head_model_name, **kwargs)
+        
+        # {0: original, 1: shuffled, 2: random}
+        self.head = nn.Sequential(
+            nn.Dropout(self.config.hidden_dropout_prob),
+            nn.Linear(self.config.hidden_size, ShuffleRandomLMHead.NUM_CLASSES) 
+        )
+        
+        self.shuffle_probability = 0.10
+        self.random_probability = 0.10
+        self.name = "shuffle_random"
+
+    def _whole_word_mask(self, input_tokens, max_predictions=512):
+        cand_indexes = []
+
+        for i, token in enumerate(input_tokens):
+            if token == "[CLS]" or token == "[SEP]":
+                continue
+
+            if len(cand_indexes) >= 1 and token.startswith("##"):
+                cand_indexes[-1].append(i)
+            else:
+                cand_indexes.append([i])
+
+        random.shuffle(cand_indexes)
+        num_to_predict = min(
+            max_predictions, 
+            max(1, int(round(len(input_tokens) * (self.shuffle_probability + self.random_probability))))
+        )
+        
+        masked_lms = []
+        covered_indexes = set()
+        
+        for index_set in cand_indexes:
+            if len(masked_lms) >= num_to_predict:
+                break
+
+            if len(masked_lms) + len(index_set) > num_to_predict:
+                continue
+
+            is_any_index_covered = False
+            for index in index_set:
+                if index in covered_indexes:
+                    is_any_index_covered = True
+                    break
+            
+            if is_any_index_covered:
+                continue
+            
+            for index in index_set:
+                covered_indexes.add(index)
+                masked_lms.append(index)
+
+        if len(covered_indexes) != len(masked_lms):
+            raise ValueError("Length of covered_indexes is not equal to length of masked_lms.")
+        
+        return [1 if i in covered_indexes else 0 for i in range(len(input_tokens))]
+
+    def mask_tokens(self, inputs):
+        mask_labels = []
+        for i in inputs["input_ids"]:
+            ref_tokens = []
+
+            for id_ in i.cpu().numpy():
+                token = self.tokenizer._convert_id_to_token(id_)
+                ref_tokens.append(token)
+
+            mask_labels.append(self._whole_word_mask(ref_tokens))
+
+        batch_mask = torch.nn.utils.rnn.pad_sequence(
+            torch.tensor(mask_labels), 
+            batch_first=True, 
+            padding_value=self.tokenizer.pad_token_id
+        )
+
+        input_ids_new, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
+        inputs["input_ids"] = input_ids_new
+
+        return inputs, labels
+
+    def _mask_tokens(self, inputs, mask_labels):
+        # copy the existing inputs and treat as labels
+        labels = inputs.clone()
+
+        # take care of special tokens such as [CLS] and [SEP]
+        special_tokens_mask = [
+            self.tokenizer.get_special_tokens_mask(x, already_has_special_tokens=True) for x in labels
+        ]
+
+        # in case there a special token has been chosen for masking, do not use it
+        probability_matrix = mask_labels
+        probability_matrix.masked_fill_(
+            torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0
+        )
+
+        # make sure [PAD] tokens arent used in masking
+        if self.tokenizer._pad_token is not None:
+            padding_mask = labels.eq(self.tokenizer.pad_token_id)
+            probability_matrix.masked_fill_(padding_mask, value=0.0)
+        
+        masked_indices = probability_matrix.bool()
+        non_masked_indices = ~masked_indices
+
+        # 10% of the time replace randomly with a token in the sequence
+        non_pad_indices = ~padding_mask
+        candidate_replace = masked_indices & non_pad_indices
+        
+        shuffle_prob = self.shuffle_probability / (self.shuffle_probability + self.random_probability)
+        shuffle_prob_tensor = torch.full(candidate_replace.shape, shuffle_prob)
+        shuffle_prob_tensor.masked_fill_(~candidate_replace, value=0.0)
+        shuffle_sample_mask = torch.bernoulli(shuffle_prob_tensor).bool()
+
+        # 10% of the time replace with a random token
+
+        return inputs, labels
+        
+        pass
+    
+    def get_loss(self, x, y):
+        pass
+    
+    def save_head(self, step):
+        pass
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     #dataset = get_dataset("CT23")

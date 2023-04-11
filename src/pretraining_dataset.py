@@ -7,6 +7,7 @@ def get_pretraining_dataset(dataset_name):
         "CT23": PretrainingDatasetForCheckworthiness,
         "CT21": PretrainingDatasetForCheckworthiness,
         "FEVER": PretrainingDatasetForVerification, 
+        "climate_FEVER": PretrainingDatasetForVerification, 
     }
     return d[dataset_name]
 

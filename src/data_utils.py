@@ -18,7 +18,8 @@ def get_dataset(dataset, **kwargs):
     DATASET_MAPPING = {
         "CT23": (_load_CT23_dataset, "checkworthiness"),
         "CT21": (_load_CT21_dataset, "checkworthiness"),
-        "FEVER": (_load_FEVER_dataset, "verification")
+        "FEVER": (_load_FEVER_dataset, "verification"),
+        "climate_FEVER": (_load_climate_FEVER_dataset, "verification")
     }
     dataset_f, type_ = DATASET_MAPPING[dataset]
     return dataset_f(**kwargs), type_
@@ -70,7 +71,7 @@ def _load_CT21_dataset(path=os.path.join("./data", "checkworthiness", "CT21_1A_c
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
-def _load_FEVER_dataset(path=os.path.join("./data", "verification", "fever"), sampled=True):
+def _load_FEVER_dataset(path=os.path.join("./data", "verification", "FEVER"), sampled=True):
     dataset_paths = [
         "fever_train_sampled.csv" if sampled else "fever_train.csv",
         "fever_validation.csv",
@@ -78,9 +79,9 @@ def _load_FEVER_dataset(path=os.path.join("./data", "verification", "fever"), sa
     ]
     dfs = [pd.read_csv(os.path.join(path, p), converters={"evidence": pd.eval}) for p in dataset_paths]
     for i, d in enumerate(dfs):
-        if not sampled:
+        dfs[i].drop("Unnamed: 0", axis=1, inplace=True)
+        if "verifiable" in d.columns.tolist() and "original_id" in d.columns.tolist():
             dfs[i].drop(columns=["verifiable", "original_id"], inplace=True)
-        dfs[i].loc[:, "evidence"] = dfs[i].evidence.apply(lambda x: [" ".join(s) for s in x])
         d.loc[:, "label"].replace({
             "REFUTES": 0, 
             "SUPPORTS": 1, 
@@ -89,11 +90,21 @@ def _load_FEVER_dataset(path=os.path.join("./data", "verification", "fever"), sa
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
+def _load_climate_FEVER_dataset(path=os.path.join("./data", "verification", "climate_FEVER")):
+    dataset_paths = [
+        "climate_fever_train_stratified.csv",
+        "climate_fever_validation_stratified.csv",
+        "climate_fever_test_stratified.csv",
+    ]
+    dfs = [pd.read_csv(os.path.join(path, p), converters={"evidence": pd.eval}) for p in dataset_paths]
+    hf_dfs = _make_dict(*dfs)
+    return hf_dfs
 
 def _get_tokenizer(type_):
     d = {
-        "vanilla_wwm": (BertTokenizer, BertConfig),
-        "electra": (ElectraTokenizer, ElectraConfig)
+        "wwm_mlm": (BertTokenizer, BertConfig),
+        "wwm_electra": (ElectraTokenizer, ElectraConfig),
+        "shuffle_random": (BertTokenizer, BertConfig)
     }
     return d[type_]
 
@@ -111,6 +122,10 @@ class PretrainingCollator:
         )
         return tokenized_examples
 
-# if __name__ == "__main__": # for testing
-#     #_load_CT23_dataset()
-#     _load_FEVER_dataset()
+if __name__ == "__main__": # for testing
+    #d =_load_CT23_dataset()
+    #d =_load_CT21_dataset()
+    #d = _load_FEVER_dataset()
+    d = _load_climate_FEVER_dataset()
+    print(d)
+    
