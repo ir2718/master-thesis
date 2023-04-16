@@ -59,5 +59,6 @@ model.train_loop(
     train_loaders=train_loaders, 
     validation_loaders=validation_loaders, 
     optimizer=optimizer, 
-    scheduler=scheduler
+    scheduler=scheduler,
+    gradient_accumulation_steps=args.gradient_accumulation_steps
 )

@@ -118,14 +118,12 @@ class MultiTaskModel(nn.Module):
             else:
                 preds = xi.view(-1) > 0 # unnormalized logits!
             
-            print(preds.shape, yi.shape)
-            
             equal = (preds == yi)[yi != -100].float()
             d[self.heads[i].get_name()].append(equal.mean())
         return d
 
 
-    def train_loop(self, num_steps, train_loaders, validation_loaders, optimizer, scheduler):        
+    def train_loop(self, num_steps, train_loaders, validation_loaders, optimizer, scheduler, gradient_accumulation_steps):        
         train_losses, val_losses = [], []
         train_accs = {h.get_name():[] for h in self.heads}
         val_accs = {h.get_name():[] for h in self.heads}
@@ -140,8 +138,6 @@ class MultiTaskModel(nn.Module):
         step = 0
         for e in range(num_epochs):
             for i, batches in tqdm(enumerate(zip(*train_loaders))):
-                optimizer.zero_grad()
-
                 # goes over multiple batches in case multiple loaders are used
                 train_loss_batch, train_acc_batch = 0, 0
                 for b in batches:
@@ -152,11 +148,13 @@ class MultiTaskModel(nn.Module):
                 train_loss_batch.backward()
                 train_losses.append(train_loss_batch.cpu().detach().item())
 
-                optimizer.step()
-                scheduler.step()
+                step += 1 
+                if step % gradient_accumulation_steps == 0:
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
                 # calculate train loss and acc
-                step += 1 
                 if (step % self.log_steps) == 0:
                     self.log(step, train_loss_batch, train_accs)
 
@@ -637,8 +635,8 @@ class ShuffleRandomLMHead(BaseLMHead):
             nn.Linear(self.config.hidden_size, ShuffleRandomLMHead.NUM_CLASSES) 
         )
         
-        self.shuffle_probability = 0.10
-        self.random_probability = 0.10
+        self.shuffle_probability = 0.2
+        self.random_probability = 0.2
         self.name = "shuffle_random"
 
     def _whole_word_mask(self, input_tokens, max_predictions=512):
@@ -703,7 +701,7 @@ class ShuffleRandomLMHead(BaseLMHead):
             batch_first=True, 
             padding_value=self.tokenizer.pad_token_id
         )
-
+        
         input_ids_new, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
         inputs["input_ids"] = input_ids_new
 
@@ -730,36 +728,42 @@ class ShuffleRandomLMHead(BaseLMHead):
             probability_matrix.masked_fill_(padding_mask, value=0.0)
         
         masked_indices = probability_matrix.bool()
-        non_masked_indices = ~masked_indices
 
-        # 10% of the time replace randomly with a token in the sequence
-        non_pad_indices = ~padding_mask
-        candidate_replace = masked_indices & non_pad_indices
-        
         shuffle_prob = self.shuffle_probability / (self.shuffle_probability + self.random_probability)
-        shuffle_prob_tensor = torch.full(candidate_replace.shape, shuffle_prob)
-        shuffle_prob_tensor.masked_fill_(~candidate_replace, value=0.0)
-        shuffle_sample_mask = torch.bernoulli(shuffle_prob_tensor).bool()
+        for i, row_mask  in enumerate(masked_indices):
+            ones_indices = torch.where(row_mask)[0]
+            
+            # 10% of the time replace randomly with a token in the sequence
+            shuffle_indices_mask = torch.bernoulli(torch.full((ones_indices.shape[0],), shuffle_prob)).bool()
+            shuffle_indices = ones_indices[shuffle_indices_mask]
+            permuted_shuffle_indices = shuffle_indices[torch.randperm(shuffle_indices.shape[0])]
+            inputs[i, shuffle_indices] = inputs[i, permuted_shuffle_indices]
+    
+            # 10% of the time replace with a random token
+            random_indices_mask = ~shuffle_indices_mask
+            random_indices = ones_indices[random_indices_mask]
+            inputs[i, random_indices] = torch.randint(len(self.tokenizer), random_indices.shape, dtype=torch.long)
 
-        # 10% of the time replace with a random token
-
+            # make labels such that -100 is where special tokens are
+            # 0 -> original
+            # 1 -> shuffled
+            # 2 -> random
+            labels[i] = torch.tensor(special_tokens_mask[i])
+            labels[i, labels[i] == 1] = -100
+            labels[i, random_indices] = 2
+            labels[i, shuffle_indices] = 1
+            
         return inputs, labels
-        
-        pass
     
     def get_loss(self, x, y):
-        pass
+        # this is why -100 is used for tokens that dont go into loss
+        shuffle_random_loss = cross_entropy(
+            x.view(-1, 3), y.view(-1), ignore_index=-100
+        )
+        return shuffle_random_loss
     
     def save_head(self, step):
         pass
-
-
-
-
-
-
-
-
 
 
 

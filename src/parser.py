@@ -4,7 +4,7 @@ def parse_pretraining_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="bert-base-cased")
     parser.add_argument("--modeling_type", nargs="+", type=str, default=["vanilla_wwm"])
-    parser.add_argument("--dataset", type=str, default="CT23") # CT23, CT21, FEVER
+    parser.add_argument("--dataset", type=str, default="CT23") # CT23, CT21, FEVER, climate_FEVER
     parser.add_argument("--experiment_name", type=str, default="experiment")
     parser.add_argument("--num_steps", type=int, default=5000)
     parser.add_argument("--val_steps", type=int, default=500)
@@ -12,6 +12,7 @@ def parse_pretraining_model():
     parser.add_argument("--val_log_steps", type=int, default=20)
     parser.add_argument("--train_batch_size", type=int, default=64)
     parser.add_argument("--val_batch_size", type=int, default=64)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--optimizer", type=str, default="adamw")
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -25,10 +26,11 @@ def parse_pretraining_model():
 def parse_finetune_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="bert-base-cased")
-    parser.add_argument("--dataset", type=str, default="CT23") # CT23, CT21, FEVER
+    parser.add_argument("--dataset", type=str, default="CT23") # CT23, CT21, FEVER, climate_FEVER
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--train_batch_size", type=int, default=16)
     parser.add_argument("--val_batch_size", type=int, default=32)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--optimizer", type=str, default="adamw_torch")
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--lr", type=float, default=2e-5)

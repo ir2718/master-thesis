@@ -28,6 +28,7 @@ training_args = TrainingArguments(
     weight_decay=args.weight_decay,
     learning_rate=args.lr,
     lr_scheduler_type=args.scheduler,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
     warmup_ratio=args.warmup_ratio,
     metric_for_best_model=f"eval_{args.metric}",
     load_best_model_at_end=True,
