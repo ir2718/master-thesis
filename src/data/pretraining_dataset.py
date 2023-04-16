@@ -1,6 +1,5 @@
 from torch.utils.data import Dataset
-from src.data_utils import get_dataset
-from abc import ABC
+from src.utils.data_utils import get_dataset
 
 def get_pretraining_dataset(dataset_name):
     d = {
@@ -26,8 +25,6 @@ class PretrainingDatasetForVerification(BasePretrainingDataset):
 
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
-        #if self.has_label:
-        #    return row["claim"], row["label"] 
         return row["claim"]
 
 class PretrainingDatasetForCheckworthiness(BasePretrainingDataset):
@@ -36,8 +33,6 @@ class PretrainingDatasetForCheckworthiness(BasePretrainingDataset):
 
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
-        #if self.has_label:
-        #    return row["text"], row["label"]
         return row["text"]
             
 

@@ -2,7 +2,7 @@ import argparse
 import os
 import numpy as np
 import pandas as pd
-from src.data_utils import get_dataset
+from src.utils.data_utils import get_dataset
 from sklearn.model_selection import train_test_split
 
 def parse():

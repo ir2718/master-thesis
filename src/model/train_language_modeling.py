@@ -1,9 +1,9 @@
-from src.parser import parse_pretraining_model
-from src.pretraining_dataset import get_pretraining_dataset
-from src.language_modeling import get_LM_head, MultiTaskModel
-from src.model_utils import get_optimizer, get_scheduler
-from src.train_utils import set_seed
-from src.data_utils import PretrainingCollator
+from src.parser.parser import parse_pretraining_model
+from src.data.pretraining_dataset import get_pretraining_dataset
+from src.model.language_modeling import get_LM_head, MultiTaskModel
+from src.utils.model_utils import get_optimizer, get_scheduler
+from src.utils.train_utils import set_seed
+from src.utils.data_utils import PretrainingCollator
 from torch.utils.data import DataLoader
 import torch
 

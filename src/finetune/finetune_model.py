@@ -1,9 +1,9 @@
 from transformers import set_seed, TrainingArguments, Trainer, DataCollatorWithPadding
 import os
-from src.parser import parse_finetune_model
-from src.model_utils import load_hf_model, add_special_tokens
-from src.train_utils import get_compute_metrics, tokenize_dataset 
-from src.data_utils import get_dataset, get_num_labels
+from src.parser.parser import parse_finetune_model
+from src.utils.model_utils import load_hf_model
+from src.utils.train_utils import get_compute_metrics, tokenize_dataset 
+from src.utils.data_utils import get_dataset, get_num_labels
 
 args = parse_finetune_model()
 set_seed(args.seed)
@@ -12,7 +12,6 @@ dataset_dict, type_ = get_dataset(args.dataset)
 num_labels = get_num_labels(dataset_dict)
 
 model, tokenizer, config = load_hf_model(args.model, num_labels, use_fast=False)
-# tokenizer = add_special_tokens(model, tokenizer, type_)
 dataset_dict = tokenize_dataset(dataset_dict, tokenizer, type_)
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
