@@ -7,16 +7,18 @@ from transformers import (
 import torch
 
 def load_hf_model(model_name, num_labels, **kwargs):
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name, 
-        num_labels=num_labels,
-    )
+    config = AutoConfig.from_pretrained(model_name)
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name, 
         **kwargs
     )
-    config = AutoConfig.from_pretrained(model_name)
+    
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, 
+        num_labels=num_labels
+    )
+
     return model, tokenizer, config
 
 def get_optimizer(model, optimizer_name, **kwargs):

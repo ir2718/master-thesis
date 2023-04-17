@@ -19,7 +19,7 @@ def get_dataset(dataset, **kwargs):
         "CT23": (_load_CT23_dataset, "checkworthiness"),
         "CT21": (_load_CT21_dataset, "checkworthiness"),
         "FEVER": (_load_FEVER_dataset, "verification"),
-        "climate_FEVER": (_load_climate_FEVER_dataset, "verification")
+        "covidFACT": (_load_covidFACT_dataset, "verification")
     }
     dataset_f, type_ = DATASET_MAPPING[dataset]
     return dataset_f(**kwargs), type_
@@ -41,9 +41,9 @@ def _load_CT23_dataset(path=os.path.join("./data", "checkworthiness", "CT23_1B_c
         "CT23_1B_checkworthy_english_dev_test.tsv",
     ]
     dfs = [pd.read_csv(os.path.join(path, p), sep="\t") for p in dataset_paths]
-    for d in dfs:
-        d.loc[:, "class_label"].replace({"Yes": 1, "No": 0}, inplace=True)
-        d.rename(columns={
+    for i, d in enumerate(dfs):
+        dfs[i].loc[:, "class_label"].replace({"Yes": 1, "No": 0}, inplace=True)
+        dfs[i].rename(columns={
             "Sentence_id": "id",
             "Text": "text",
             "class_label": "label"
@@ -63,7 +63,7 @@ def _load_CT21_dataset(path=os.path.join("./data", "checkworthiness", "CT21_1A_c
         dfs[i].drop(columns=["tweet_url"], inplace=True)
         if not multi:
             dfs[i].drop(columns=["topic_id", "claim"], inplace=True)
-        d.rename(columns={
+        dfs[i].rename(columns={
             "tweet_id": "id",
             "tweet_text": "text",
             "claim_worthiness" if i == 1 else "check_worthiness": "label"
@@ -82,21 +82,30 @@ def _load_FEVER_dataset(path=os.path.join("./data", "verification", "FEVER"), sa
         dfs[i].drop("Unnamed: 0", axis=1, inplace=True)
         if "verifiable" in d.columns.tolist() and "original_id" in d.columns.tolist():
             dfs[i].drop(columns=["verifiable", "original_id"], inplace=True)
-        d.loc[:, "label"].replace({
+        dfs[i].loc[:, "label"].replace({
             "REFUTES": 0, 
             "SUPPORTS": 1, 
             "NOT ENOUGH INFO": 2
         }, inplace=True)
+        dfs[i]["evidence"] = d["evidence"].map(lambda x: [i[-1] for i in x])
+        print(i, d.dtypes)        
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
-def _load_climate_FEVER_dataset(path=os.path.join("./data", "verification", "climate_FEVER")):
+def _load_covidFACT_dataset(path=os.path.join("./data", "verification", "covidfact")):
     dataset_paths = [
-        "climate_fever_train_stratified.csv",
-        "climate_fever_validation_stratified.csv",
-        "climate_fever_test_stratified.csv",
+        "covidfact_stratified_train.csv",
+        "covidfact_stratified_validation.csv",
+        "covidfact_stratified_test.csv",
     ]
     dfs = [pd.read_csv(os.path.join(path, p), converters={"evidence": pd.eval}) for p in dataset_paths]
+    for i, d in enumerate(dfs):
+        dfs[i].loc[:, "label"].replace({
+            "REFUTED": 0, 
+            "SUPPORTED": 1,
+        }, inplace=True)
+
+        print(i, d.dtypes)        
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 

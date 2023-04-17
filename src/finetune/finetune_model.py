@@ -15,6 +15,21 @@ model, tokenizer, config = load_hf_model(args.model, num_labels, use_fast=False)
 dataset_dict = tokenize_dataset(dataset_dict, tokenizer, type_)
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
+
+print(tokenizer.decode(dataset_dict["train"]["input_ids"][0]))
+print(dataset_dict["train"]["claim"][0])
+print(dataset_dict["train"]["evidence"][0])
+print()
+print(tokenizer.decode(dataset_dict["validation"]["input_ids"][0]))
+print(dataset_dict["validation"]["claim"][0])
+print(dataset_dict["validation"]["evidence"][0])
+print()
+print(tokenizer.decode(dataset_dict["test"]["input_ids"][0]))
+print(dataset_dict["test"]["claim"][0])
+print(dataset_dict["test"]["evidence"][0])
+print()
+print(num_labels)
+
 training_args = TrainingArguments(
     output_dir=os.path.join("./models", type_, args.dataset, args.model),
     evaluation_strategy="epoch",

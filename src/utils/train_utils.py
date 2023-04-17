@@ -10,12 +10,16 @@ def get_compute_metrics(dataset):
         "CT23": compute_metrics,
         "CT21": compute_metrics,
         "FEVER": compute_metrics_multiclass,
+        "covidFACT": compute_metrics,
     }
     return MAPPING_COMPUTE_METRICS[dataset]
 
 def compute_metrics(eval_pred):
     preds, labels = eval_pred
+    print(preds)
     preds = preds.argmax(axis=1)
+    print(preds)
+    print(labels)
     return {
         "accuracy": accuracy_score(y_pred=preds, y_true=labels),
         "recall": recall_score(y_pred=preds, y_true=labels),
@@ -34,14 +38,16 @@ def compute_metrics_multiclass(eval_pred):
     }
 
 def _tokenize(text, tokenizer):
-    return tokenizer(text, truncation=True, padding=True, return_tensors="pt")
+    return tokenizer(text, add_special_tokens=True, truncation=True, padding=True, return_tensors="pt")
 
 def _tokenize_checkworthiness(x, **kwargs):
     return _tokenize(text=x["text"], **kwargs)
 
 def _tokenize_veracity(x, **kwargs):
-    l = [f"{i} [SEP] {' [SEP] '.join(j)}" for i, j in zip(x["claim"], x["evidence"])]
-    return  _tokenize(text=l, **kwargs)
+    # [CLS] claim [SEP] evidence1 [SEP] evidence_n [SEP]
+    l = [f"{i} {kwargs['tokenizer'].sep_token}" + f" {kwargs['tokenizer'].sep_token} ".join(j) for i, j in zip(x["claim"], x["evidence"])]
+    tokenized  = _tokenize(text=l, **kwargs)
+    return tokenized
 
 # def _tokenize_veracity_with_special(x):
 #     s = " [SEP_EVIDENCE]"
@@ -55,7 +61,7 @@ def tokenize_dataset(dataset_dict, tokenizer, type_):
     tokenize_f = _tokenize_checkworthiness if type_ == "checkworthiness" else _tokenize_veracity
     dataset_dict = dataset_dict.map( 
         lambda x: tokenize_f(x, tokenizer=tokenizer),
-        batched=True # False
+        batched=True
     )
     return dataset_dict
 

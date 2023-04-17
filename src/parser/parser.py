@@ -12,7 +12,7 @@ def parse_pretraining_model():
     parser.add_argument("--val_log_steps", type=int, default=20)
     parser.add_argument("--train_batch_size", type=int, default=64)
     parser.add_argument("--val_batch_size", type=int, default=64)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
     parser.add_argument("--optimizer", type=str, default="adamw")
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--lr", type=float, default=1e-4)
