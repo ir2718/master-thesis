@@ -9,14 +9,18 @@ class ShuffleRandomLMHead(BaseLMHead):
     
     NUM_CLASSES = 3
         
-    def __init__(self, multi_task_model, head_model_name, **kwargs):
+    def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
-        
+        self.device = device
+        self.distributed = distributed
         # {0: original, 1: shuffled, 2: random}
         self.head = nn.Sequential(
             nn.Dropout(self.config.hidden_dropout_prob),
             nn.Linear(self.config.hidden_size, ShuffleRandomLMHead.NUM_CLASSES) 
-        )
+        ).to(self.device)
+
+        if self.distributed:
+            self.head = nn.DataParallel(self.head)
         
         self.shuffle_probability = 0.2
         self.random_probability = 0.2
@@ -70,6 +74,11 @@ class ShuffleRandomLMHead(BaseLMHead):
 
     def mask_tokens(self, inputs):
         mask_labels = []
+
+        inputs = self.tokenizer(
+            ["i love pretraining, or do  i", "i need some longer text in order to have padding tokens in the batch"],
+            padding=True, truncation=True, return_tensors="pt"
+        )
         for i in inputs["input_ids"]:
             ref_tokens = []
 

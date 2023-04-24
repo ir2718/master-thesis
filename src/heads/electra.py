@@ -38,7 +38,7 @@ class ElectraLMHead(BaseLMHead):
         self._tie_weights(multi_task_model)
         
         self.gumbel = torch.distributions.gumbel.Gumbel(0., 1.)
-        self.wwm_probability = 0.4 # vrati na 0.15
+        self.wwm_probability = 0.15
         self.name = "electra"
         self.distributed = distributed
 

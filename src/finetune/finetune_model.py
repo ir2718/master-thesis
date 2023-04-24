@@ -7,37 +7,34 @@ from transformers import (
     AutoModel
 )
 from abc import abstractmethod
-from src.utils.train_utils import _tokenize_veracity, _tokenize_checkworthiness
-from src.utils.train_utils import compute_metrics, compute_metrics_multiclass
+from src.utils.train_utils import compute_metrics, compute_metrics_multiclass, batch_to_device
 import numpy as np
 from tqdm import tqdm
+import os
 
 class FinetuneModel(nn.Module):
 
     MAX_GRAD_NORM = 1.0
 
-    def __init__(self, pretrained_model_name, num_epochs, experiment_name, device, distributed):
+    def __init__(self, model, model_path, num_epochs, experiment_name, metric, device, distributed):
         super().__init__()
         self.num_epochs = num_epochs
         self.experiment_name = experiment_name
+        self.metric = metric
+        self.device = device
         self.distributed = distributed
 
-        self.config = AutoConfig.from_pretrained(pretrained_model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)        
-        self.model = AutoModel.from_pretrained(
-            pretrained_model_name,
-            config=self.config,
-            local_files_only=True
-        ).to(device)
-        if self.distributed:
-            self.model = torch.nn.DataParallel(self.model)
-
+        self.config = AutoConfig.from_pretrained(model)
+        self.tokenizer = AutoTokenizer.from_pretrained(model)        
+        self.model = torch.load(model_path).to(self.device)
         self.pooler = nn.Sequential(
             nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=True),
             nn.Tanh(),
             nn.Dropout(p=self.config.hidden_dropout_prob, inplace=False),
-        )
+        ).to(self.device)
+
         if self.distributed:
+            self.model = torch.nn.DataParallel(self.model)
             self.pooler = torch.nn.DataParallel(self.pooler)
 
         self.callbacks = []
@@ -45,7 +42,7 @@ class FinetuneModel(nn.Module):
         self.scheduler = None
 
     def add_final_layer(self, num_labels):
-        self.cls = nn.Linear(self.config.hidden_size, num_labels)
+        self.cls = nn.Linear(self.config.hidden_size, num_labels).to(self.device)
         if self.distributed:
             self.cls = torch.nn.DataParallel(self.cls)
 
@@ -66,9 +63,6 @@ class FinetuneModel(nn.Module):
 
     def set_callbacks(self, callbacks):
         self.callbacks = callbacks
-
-    def batch_to_device(self, batch):
-        return {k:v.to(self.device) for k,v  in batch.items()}
     
     def forward(self, x):
         out = self.model(**x).last_hidden_state[:, 0, :] # get [CLS] from B, seq_len, hidden_dim
@@ -91,20 +85,20 @@ class FinetuneModel(nn.Module):
         self.train()
         self.init_metric_dict()
 
+        metric = None
         running_loss = []
-        step = 0
-        total_loss = 0.0
+        step, total_loss = 0, 0.0
         for e in range(num_epochs):
 
             for c in self.callbacks:
                 c.on_epoch_begin()
 
             for i, b in tqdm(enumerate(train_dataloader)):
-                texts, labels = b
+                tokenized_texts, labels = b
 
-                tokenized_texts = self.tokenize_function(texts)
-                tokenized_texts = self.batch_to_device(tokenized_texts)
-                labels = labels.to(self.device)
+                if not self.distributed:
+                    tokenized_texts = batch_to_device(tokenized_texts, self.device)
+                    labels = labels.to(self.device)
 
                 out = self.forward(tokenized_texts)
 
@@ -125,10 +119,20 @@ class FinetuneModel(nn.Module):
             self.validate(train_dataloader, validation_dataloader)
             self.log_metrics(e)
 
+            if metric is None or max(self.val_metric_dict) == self.val_metric_dict[-1]:
+                self.save_model(e)
+
             for c in self.callbacks:
                 c.on_epoch_end()
 
         self.eval()
+
+    def save_model(self, epoch):
+        save_path = os.path.join("./models", f"{self.experiment_name}")
+        torch.save(self, os.path.join(save_path, f"best_model_{epoch}"))
+        print()
+        print(f"Saved model at epoch {epoch}")
+        print()
 
     def log_metrics(self, num_epoch):
         print()
@@ -141,9 +145,8 @@ class FinetuneModel(nn.Module):
     def _validate_dataloader(self, dataloader):
         losses, preds, labels = [], [], []
         for i, b in enumerate(dataloader):
-            texts, labels = b
+            tokenized_texts, labels = b
 
-            tokenized_texts = self.tokenize_function(texts)
             tokenized_texts = self.batch_to_device(tokenized_texts)
             labels_step = labels.to(self.device)
 

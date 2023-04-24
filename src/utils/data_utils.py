@@ -5,7 +5,10 @@ from transformers import (
     BertTokenizer, 
     ElectraTokenizer,
     BertConfig,
-    ElectraConfig
+    ElectraConfig,
+    AutoTokenizer,
+    AutoModel,
+    AutoConfig
 )
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
@@ -130,6 +133,17 @@ class PretrainingCollator:
             examples, padding=True, truncation=True, return_tensors="pt"
         )
         return tokenized_examples
+
+class FinetuningCollator:
+    def __init__(self, model):
+        self.config = AutoConfig.from_pretrained(model)
+        self.tokenizer = AutoTokenizer.from_pretrained(model, config=self.config)
+        
+    def collate_fn(self, examples):
+        tokenized_examples = self.tokenizer(
+            [ex for ex, _ in examples], padding=True, truncation=True, return_tensors="pt"
+        )
+        return tokenized_examples, torch.tensor([label for _, label in examples])
 
 if __name__ == "__main__": # for testing
     #d =_load_CT23_dataset()

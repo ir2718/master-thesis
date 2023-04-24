@@ -195,7 +195,7 @@ class MultiTaskModel(nn.Module):
         pbar.close()
 
     def save_metrics(self):
-        save_path = os.path.join("pretrained_models", self.experiment_name)
+        save_path = os.path.join("pretrained_models", f"{self.experiment_name}")
         
         metrics = dict()
         for k in self.train_metrics.keys():
@@ -263,7 +263,7 @@ class MultiTaskModel(nn.Module):
         print()
 
     def save_model_and_heads(self, step):
-        save_path = os.path.join("pretrained_models", self.experiment_name, step)
+        save_path = os.path.join("pretrained_models", f"{self.experiment_name}", f"{step}")
         os.makedirs(save_path, exist_ok=True)
         torch.save(self.model, os.path.join(save_path, f"backbone_{step}"))
         print()
