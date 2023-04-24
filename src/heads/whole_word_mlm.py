@@ -6,12 +6,13 @@ from transformers import (
 )
 from torch.nn.functional import cross_entropy
 import torch
+import torch.nn as nn
 import random
 
 
 class WholeWordMaskedLMHead(BaseLMHead):
 
-    def __init__(self, multi_task_model, head_model_name, **kwargs):
+    def __init__(self, multi_task_model, head_model_name, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
         self.config = BertConfig.from_pretrained(head_model_name)
         self.tokenizer = BertTokenizer.from_pretrained(head_model_name)
@@ -20,6 +21,9 @@ class WholeWordMaskedLMHead(BaseLMHead):
             config=self.config
         ).cls
         
+        if distributed:
+            self.head = nn.DataParallel(self.head)
+
         self.wwm_probability = 0.15
         self.name = "vanilla_wwm"
 
@@ -121,7 +125,7 @@ class WholeWordMaskedLMHead(BaseLMHead):
             probability_matrix.masked_fill_(padding_mask, value=0.0)
         
         masked_indices = probability_matrix.bool()
-        labels[~masked_indices] = -100 # only compute the loss for masked tokens, -100 = [PAD]
+        labels[~masked_indices] = -100 # only compute the loss for masked tokens
 
         # 80% of the time, replace the tokens with [MASK]
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices

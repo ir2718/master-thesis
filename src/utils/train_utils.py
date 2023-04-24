@@ -16,10 +16,7 @@ def get_compute_metrics(dataset):
 
 def compute_metrics(eval_pred):
     preds, labels = eval_pred
-    print(preds)
     preds = preds.argmax(axis=1)
-    print(preds)
-    print(labels)
     return {
         "accuracy": accuracy_score(y_pred=preds, y_true=labels),
         "recall": recall_score(y_pred=preds, y_true=labels),
@@ -41,6 +38,7 @@ def _tokenize(text, tokenizer):
     return tokenizer(text, add_special_tokens=True, truncation=True, padding=True, return_tensors="pt")
 
 def _tokenize_checkworthiness(x, **kwargs):
+    # [CLS] claim [SEP]
     return _tokenize(text=x["text"], **kwargs)
 
 def _tokenize_veracity(x, **kwargs):

@@ -1,6 +1,6 @@
 from src.parser.parser import parse_pretraining_model
-from src.data.pretraining_dataset import get_pretraining_dataset
-from src.model.language_modeling import get_LM_head, MultiTaskModel
+from src.data.dataset import get_pretraining_dataset
+from src.model.language_modeling import MultiTaskModel
 from src.utils.model_utils import get_optimizer, get_scheduler
 from src.utils.train_utils import set_seed
 from src.utils.data_utils import PretrainingCollator
@@ -39,6 +39,7 @@ model = MultiTaskModel(
     val_log_steps=args.val_log_steps,
     experiment_name=args.experiment_name,
     modeling_types=args.modeling_type,
+    distributed=args.distributed,
     device=device
 )
 
