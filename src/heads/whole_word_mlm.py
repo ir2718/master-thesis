@@ -5,21 +5,24 @@ from transformers import (
     BertForMaskedLM,
 )
 from torch.nn.functional import cross_entropy
-import torch
 import torch.nn as nn
+import torch
+import os
 import random
 
 
 class WholeWordMaskedLMHead(BaseLMHead):
 
-    def __init__(self, multi_task_model, head_model_name, distributed, **kwargs):
+    def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
+        self.device = device
+
         self.config = BertConfig.from_pretrained(head_model_name)
         self.tokenizer = BertTokenizer.from_pretrained(head_model_name)
         self.head = BertForMaskedLM.from_pretrained(
             head_model_name,
             config=self.config
-        ).cls
+        ).cls.to(self.device)
         
         if distributed:
             self.head = nn.DataParallel(self.head)
@@ -149,9 +152,8 @@ class WholeWordMaskedLMHead(BaseLMHead):
         )
         return masked_lm_loss
     
-    def save_head(self, step, experiment_name):
-        save_path = f"./pretrained_models/mlm_head_{experiment_name}_{step}"
-        torch.save(self.head, save_path)
+    def save_head(self, step, save_path):
+        torch.save(self.head, os.path.join(save_path, f"mlm_head_{step}"))
         print()
         print(f"Saved the MLM head to {save_path}")
         print()

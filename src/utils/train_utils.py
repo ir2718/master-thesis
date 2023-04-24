@@ -34,6 +34,9 @@ def compute_metrics_multiclass(eval_pred):
         "f1": f1_score(y_pred=preds, y_true=labels, average="macro")
     }
 
+def batch_to_device(batch, device):
+    return {k:v.to(device) for k, v in batch.items()}
+
 def _tokenize(text, tokenizer):
     return tokenizer(text, add_special_tokens=True, truncation=True, padding=True, return_tensors="pt")
 

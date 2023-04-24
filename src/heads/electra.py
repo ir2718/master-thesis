@@ -5,36 +5,46 @@ from transformers import (
     ElectraForPreTraining,
     ElectraForMaskedLM,
 )
-from torch.nn.functional import binary_cross_entropy_with_logits, cross_entropy
+from src.utils.train_utils import batch_to_device
+from torch.nn.functional import (
+    binary_cross_entropy_with_logits, 
+    cross_entropy
+)
 import random
 import torch
-
+import torch.nn as nn
 
 class ElectraLMHead(BaseLMHead):
 
     GEN_WEIGHT = 1.0
     DISC_WEIGHT = 50.0
 
-    def __init__(self, multi_task_model, head_model_name, **kwargs):
+    def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
-        gen_name = "google/electra-base-generator"
-        self.config = ElectraConfig.from_pretrained(gen_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(gen_name)
+        self.device = device
+        self.gen_name = "google/electra-base-generator"
+        self.config = ElectraConfig.from_pretrained(self.gen_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.gen_name)
         self.gen_head = ElectraForMaskedLM.from_pretrained(
-            gen_name,
+            self.gen_name,
             config=self.config
-        )
+        ).to(self.device)
 
-        disc_name = "google/electra-base-discriminator"
+        self.disc_name = "google/electra-base-discriminator"
         self.disc_head = ElectraForPreTraining.from_pretrained(
-            disc_name,
-            config=ElectraConfig.from_pretrained(disc_name)
-        ).discriminator_predictions
+            self.disc_name,
+            config=ElectraConfig.from_pretrained(self.disc_name)
+        ).discriminator_predictions.to(self.device)
         self._tie_weights(multi_task_model)
         
         self.gumbel = torch.distributions.gumbel.Gumbel(0., 1.)
-        self.wwm_probability = 0.15
+        self.wwm_probability = 0.4 # vrati na 0.15
         self.name = "electra"
+        self.distributed = distributed
+
+        if self.distributed:
+            self.gen_head = nn.DataParallel(self.gen_head)
+            self.disc_head = nn.DataParallel(self.disc_head)
 
     def _tie_weights(self, multi_task_model):
         multi_task_model.model.embeddings = self.gen_head.electra.embeddings
@@ -129,9 +139,9 @@ class ElectraLMHead(BaseLMHead):
         return inputs, labels, indices_replaced
 
     def _generate_new_tokens_logits(self, inputs):
-        inputs = {k: v.to(self.gen_head.device) for k, v in inputs.items()}
-        out = self.gen_head(**inputs)[0]
-        inputs = {k: v.cpu() for k, v in inputs.items()}
+        inputs = batch_to_device(inputs, self.device)
+        out = self.gen_head(**inputs).logits
+        inputs = batch_to_device(inputs, "cpu")
         return inputs, out
 
     def mask_tokens(self, inputs):
@@ -210,15 +220,13 @@ class ElectraLMHead(BaseLMHead):
         
         return total_loss
 
-    def save_head(self, step, experiment_name):
-        save_path_gen = f"./pretrained_models/mlm_head_{experiment_name}_{step}"
-        torch.save(self.gen_head, save_path_gen)
+    def save_head(self, step, save_path):
+        torch.save(self.gen_head, f"mlm_head_{step}")
         print()
-        print(f"Saved the generative model to {save_path_gen}")
+        print(f"Saved the generative model to {save_path}")
         print()
 
-        save_path_disc = f"./pretrained_models/disc_head_{experiment_name}_{step}"
-        torch.save(self.disc_head, save_path_disc)
+        torch.save(self.disc_head, f"disc_head_{step}")
         print()
-        print(f"Saved the discriminator head to {save_path_disc}")
+        print(f"Saved the discriminator head to {save_path}")
         print()

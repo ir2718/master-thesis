@@ -7,12 +7,14 @@ from transformers import (
     ElectraForPreTraining,
     AutoTokenizer
 )
+from src.utils.train_utils import batch_to_device
 from src.heads.electra import ElectraLMHead
 from src.heads.whole_word_mlm import WholeWordMaskedLMHead
 from src.heads.shuffle_random import ShuffleRandomLMHead
 from tqdm import tqdm
 import os
 import torch
+import json
 
 def get_LM_head(model_name, pretrain_type):
     d = {
@@ -58,11 +60,12 @@ class MultiTaskModel(nn.Module):
                 pretrained_model_name,
                 tokenizer=self.tokenizer,
                 config=self.config,
+                device=device,
                 distributed=distributed,
             )
             heads.append(h)
 
-        self.heads = nn.ModuleList([h.to(device) for h in heads])
+        self.heads = nn.ModuleList(heads)
         self.device = device
 
         if self.distributed:
@@ -72,15 +75,14 @@ class MultiTaskModel(nn.Module):
         out = self.model(x)
         return [h(out) for h in self.heads]
 
-    def batch_to_device(self, batch):
-        return {k:v.to(self.device) for k, v in batch.items()}
+    
 
     def forward_head(self, inputs, head):
         # do on cpu
         x, y = head.mask_tokens(inputs)
 
         # switch to gpu
-        inputs = self.batch_to_device(inputs)
+        inputs = batch_to_device(inputs, self.device)
         y = y.to(self.device)
 
         out = self.model(**inputs).last_hidden_state
@@ -184,7 +186,27 @@ class MultiTaskModel(nn.Module):
                     # if its the best model so far
                     if self.val_metrics["loss"][-1] == min(self.val_metrics["loss"]):
                         self.save_model_and_heads(effective_step)
+
+                    if effective_step + 1 == num_steps:
+                        pbar.close()
+                        self.save_metrics()
+                        return
+
         pbar.close()
+
+    def save_metrics(self):
+        save_path = os.path.join("pretrained_models", self.experiment_name)
+        
+        metrics = dict()
+        for k in self.train_metrics.keys():
+            metrics[f"train_{k}"] = self.train_metrics[k]
+
+        for k in self.val_metrics.keys():
+            metrics[f"val_{k}"] = self.val_metrics[k]
+            
+        with open(os.path.join(save_path, "metrics.json", "w")) as fp:
+            json.dump(metrics, fp)
+
 
     def val_step(self, validation_loaders):
         self.eval()
@@ -241,14 +263,14 @@ class MultiTaskModel(nn.Module):
         print()
 
     def save_model_and_heads(self, step):
-        save_path = f"./pretrained_models/backbone_{self.experiment_name}_{step}"
-        os.makedirs("./pretrained_models", exist_ok=True)
-        torch.save(self.model, save_path)
+        save_path = os.path.join("pretrained_models", self.experiment_name, step)
+        os.makedirs(save_path, exist_ok=True)
+        torch.save(self.model, os.path.join(save_path, f"backbone_{step}"))
         print()
         print(f"Saved the backbone to {save_path}")
         print()
         for h in self.heads:
-            h.save_head(step, self.experiment_name)
+            h.save_head(step, save_path)
 
 
 
