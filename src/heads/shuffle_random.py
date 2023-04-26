@@ -2,6 +2,7 @@ from src.heads.base_head import BaseLMHead
 from torch.nn.functional import cross_entropy
 import torch.nn as nn
 import torch
+import os
 import random
 
 
@@ -22,8 +23,9 @@ class ShuffleRandomLMHead(BaseLMHead):
         if self.distributed:
             self.head = nn.DataParallel(self.head)
         
-        self.shuffle_probability = 0.2
-        self.random_probability = 0.2
+        self.shuffle_probability = 0.1
+        self.random_probability = 0.1
+        self.manipulate_prob = 0.2
         self.name = "shuffle_random"
 
     def _whole_word_mask(self, input_tokens, max_predictions=512):
@@ -70,34 +72,80 @@ class ShuffleRandomLMHead(BaseLMHead):
         if len(covered_indexes) != len(masked_lms):
             raise ValueError("Length of covered_indexes is not equal to length of masked_lms.")
         
-        return [1 if i in covered_indexes else 0 for i in range(len(input_tokens))]
+        return [1 if i in covered_indexes else 0 for i in range(len(input_tokens))], cand_indexes
 
     def mask_tokens(self, inputs):
-        mask_labels = []
+        # mask_labels = []
+        # ref_indices = []
 
-        inputs = self.tokenizer(
-            ["i love pretraining, or do  i", "i need some longer text in order to have padding tokens in the batch"],
-            padding=True, truncation=True, return_tensors="pt"
-        )
-        for i in inputs["input_ids"]:
-            ref_tokens = []
+        # inputs = self.tokenizer(
+        #     ["i love pretraining, or do  i", "i need some longer text in order to have padding tokens in the batch"],
+        #     padding=True, truncation=True, return_tensors="pt"
+        # )
+        # for i in inputs["input_ids"]:
+        #     ref_tokens = []
 
-            for id_ in i.cpu().numpy():
-                token = self.tokenizer._convert_id_to_token(id_)
-                ref_tokens.append(token)
+        #     for id_ in i.cpu().numpy():
+        #         token = self.tokenizer._convert_id_to_token(id_)
+        #         ref_tokens.append(token)
 
-            mask_labels.append(self._whole_word_mask(ref_tokens))
+        #     mask, indices = self._whole_word_mask(ref_tokens)
 
-        batch_mask = torch.nn.utils.rnn.pad_sequence(
-            torch.tensor(mask_labels), 
-            batch_first=True, 
-            padding_value=self.tokenizer.pad_token_id
-        )
+        #     mask_labels.append(mask)
+        #     ref_indices.append(indices)
+
+        # batch_mask = torch.nn.utils.rnn.pad_sequence(
+        #     torch.tensor(mask_labels), 
+        #     batch_first=True, 
+        #     padding_value=self.tokenizer.pad_token_id
+        # )
         
-        input_ids_new, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
+        input_ids_new, labels = self._mask_tokens2(inputs["input_ids"])
         inputs["input_ids"] = input_ids_new
 
         return inputs, labels
+
+    def _mask_tokens2(self, input_ids):
+        # init
+        manipulated_input_ids = input_ids.clone()
+        shuffle_random_mask = torch.zeros_like(manipulated_input_ids)
+        
+        # create shuffled input_ids matrices
+        shuffled_words = manipulated_input_ids[:, torch.randperm(manipulated_input_ids.size()[1])] # row-wise shuffle
+        # We need to care about special tokens: start, end, pad, mask.
+        # If shuffled words fall in these, they must be put back to their original tokens.
+        # This might cause the case where a shuffled token is not actually a shuffled one,
+        # but because the number of special tokens is small, it does not matter and might contribute to robustness.
+        special_tokens_indices = [
+            self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in shuffled_words.tolist()
+        ]
+        special_tokens_indices = torch.tensor(special_tokens_indices, dtype=torch.bool) # -> boolean indices
+        shuffled_words[special_tokens_indices] = manipulated_input_ids[special_tokens_indices]
+        
+        # which token is going to be shuffled?
+        # create special tokens' mask for original input_ids
+        probability_matrix = torch.full(manipulated_input_ids.shape, self.manipulate_prob)
+        special_tokens_mask = [
+            self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in manipulated_input_ids.tolist()
+        ]
+        special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
+        probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
+        shuffled_indices = torch.bernoulli(probability_matrix).bool() # -> boolean indices
+        manipulated_input_ids[shuffled_indices] = shuffled_words[shuffled_indices]
+        shuffle_random_mask[shuffled_indices] = 1
+
+        # replace some tokens with random ones
+        # this should not override shuffled tokens.
+        random_indices = torch.bernoulli(torch.full(manipulated_input_ids.shape, self.manipulate_prob)).bool() & ~shuffled_indices & ~special_tokens_mask
+        random_words = torch.randint(len(self.tokenizer), manipulated_input_ids.shape, dtype=torch.long)
+        manipulated_input_ids[random_indices] = random_words[random_indices]
+        shuffle_random_mask[random_indices] = 2
+
+        # We only compute loss on active tokens
+        shuffle_random_mask[special_tokens_mask] = -100
+
+        return manipulated_input_ids, shuffle_random_mask
+    
 
     def _mask_tokens(self, inputs, mask_labels):
         # copy the existing inputs and treat as labels
@@ -154,9 +202,8 @@ class ShuffleRandomLMHead(BaseLMHead):
         )
         return shuffle_random_loss
     
-    def save_head(self, step, experiment_name):
-        save_path = f"./pretrained_models/mlm_head_{experiment_name}_{step}"
-        torch.save(self.head, save_path)
+    def save_head(self, step, save_path):
+        torch.save(self.head, os.path.join(save_path, f"shuffle_random_head_{step}"))
         print()
         print(f"Saved the MLM head to {save_path}")
         print()

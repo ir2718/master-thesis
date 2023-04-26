@@ -60,6 +60,7 @@ def parse_finetune_model():
     parser.add_argument("--metric", type=str, default="f1") # f1, accuracy
     parser.add_argument("--warmup_ratio", type=str, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device_id", default=None)
     parser.add_argument("--distributed", action="store_true")
     args = parser.parse_args()
     return args

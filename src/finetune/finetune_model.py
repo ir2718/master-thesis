@@ -11,12 +11,13 @@ from src.utils.train_utils import compute_metrics, compute_metrics_multiclass, b
 import numpy as np
 from tqdm import tqdm
 import os
+import json
 
 class FinetuneModel(nn.Module):
 
     MAX_GRAD_NORM = 1.0
 
-    def __init__(self, model, model_path, num_epochs, experiment_name, metric, device, distributed):
+    def __init__(self, model, model_path, num_epochs, experiment_name, metric, num_labels, device, distributed):
         super().__init__()
         self.num_epochs = num_epochs
         self.experiment_name = experiment_name
@@ -37,23 +38,18 @@ class FinetuneModel(nn.Module):
             self.model = torch.nn.DataParallel(self.model)
             self.pooler = torch.nn.DataParallel(self.pooler)
 
-        self.callbacks = []
-        self.optimizer = None
-        self.scheduler = None
+        self.num_labels = num_labels - 1 if num_labels == 2 else num_labels
 
-    def add_final_layer(self, num_labels):
-        self.cls = nn.Linear(self.config.hidden_size, num_labels).to(self.device)
+        self.cls = nn.Linear(self.config.hidden_size, self.num_labels).to(self.device)
         if self.distributed:
             self.cls = torch.nn.DataParallel(self.cls)
 
-    def define_loss(self, num_labels):
-        self.loss = nn.BCEWithLogitsLoss() if num_labels == 2 else nn.CrossEntropyLoss()
+        self.loss = nn.BCEWithLogitsLoss() if self.num_labels == 1 else nn.CrossEntropyLoss()
+        self.compute_metrics = compute_metrics if self.num_labels == 1 else compute_metrics_multiclass
 
-    def define_compute_metrics(self, num_labels):
-        self.compute_metrics = compute_metrics if num_labels == 2 else compute_metrics_multiclass
-
-    def define_prediction_function(self, num_labels):
-        self.pred_function = (lambda x: x > 0) if num_labels == 2 else (lambda x: x.argmax(dim=1)) 
+        self.callbacks = []
+        self.optimizer = None
+        self.scheduler = None
 
     def set_optimizer(self, optimizer):
         self.optimizer = optimizer
@@ -68,6 +64,8 @@ class FinetuneModel(nn.Module):
         out = self.model(**x).last_hidden_state[:, 0, :] # get [CLS] from B, seq_len, hidden_dim
         out = self.pooler(out)
         out = self.cls(out)
+        if self.num_labels == 1:
+            out = out.view(-1)
         return out
     
     def init_metric_dict(self):
@@ -88,12 +86,13 @@ class FinetuneModel(nn.Module):
         metric = None
         running_loss = []
         step, total_loss = 0, 0.0
+        pbar = tqdm(total=num_epochs * len(train_dataloader))
         for e in range(num_epochs):
 
             for c in self.callbacks:
                 c.on_epoch_begin()
 
-            for i, b in tqdm(enumerate(train_dataloader)):
+            for i, b in enumerate(train_dataloader):
                 tokenized_texts, labels = b
 
                 if not self.distributed:
@@ -116,6 +115,8 @@ class FinetuneModel(nn.Module):
                     running_loss.append(total_loss)
                     total_loss = 0
 
+                pbar.update(1)
+
             self.validate(train_dataloader, validation_dataloader)
             self.log_metrics(e)
 
@@ -125,10 +126,31 @@ class FinetuneModel(nn.Module):
             for c in self.callbacks:
                 c.on_epoch_end()
 
+
+        self.save_metrics(running_loss)
+        pbar.close()
+                
         self.eval()
+
+    def save_metrics(self, running_loss):
+        save_path = os.path.join("models", f"{self.experiment_name}")
+        
+        metrics = dict()
+        for k in self.train_metric_dict.keys():
+            metrics[f"train_{k}"] = self.train_metric_dict[k]
+
+        for k in self.val_metric_dict.keys():
+            metrics[f"val_{k}"] = self.val_metric_dict[k]
+
+        metrics["running_loss"] = running_loss
+
+        with open(os.path.join(save_path, "metrics.json"), "w") as fp:
+            json.dump(metrics, fp)
+
 
     def save_model(self, epoch):
         save_path = os.path.join("./models", f"{self.experiment_name}")
+        os.makedirs(save_path, exist_ok=True)
         torch.save(self, os.path.join(save_path, f"best_model_{epoch}"))
         print()
         print(f"Saved model at epoch {epoch}")
@@ -143,35 +165,37 @@ class FinetuneModel(nn.Module):
 
     @torch.no_grad()
     def _validate_dataloader(self, dataloader):
-        losses, preds, labels = [], [], []
+        losses, outs, labels = [], [], []
         for i, b in enumerate(dataloader):
-            tokenized_texts, labels = b
+            tokenized_texts, labels_step = b
 
-            tokenized_texts = self.batch_to_device(tokenized_texts)
-            labels_step = labels.to(self.device)
+            if not self.distributed:
+                tokenized_texts = batch_to_device(tokenized_texts, self.device)
+                labels_step = labels_step.to(self.device)
 
             out = self.forward(tokenized_texts)
             loss = self.loss(out, labels_step)
             losses.append(loss.cpu().detach().item())
 
-            preds_step = self.pred_function(out)
-
-            preds.extend(preds_step.cpu().detach().tolist())
-            labels.extend(labels_step.cpu().detach().tolist())
+            outs.extend(out.cpu().detach())
+            labels.extend(labels_step.cpu().detach())
         
-        return np.mean(losses), self.compute_metrics((preds, labels))
+        outs = torch.stack(outs)
+        labels = torch.stack(labels)
+
+        return np.mean(losses), self.compute_metrics((outs, labels))
 
     def validate(self, train_dataloader, validation_dataloader):
         self.eval()
 
         train_loss, train_metrics = self._validate_dataloader(train_dataloader)
         self.train_metric_dict["loss"].append(train_loss)
-        for k in self.train_metric_dict.keys():
+        for k in train_metrics.keys():
             self.train_metric_dict[k].append(train_metrics[k])
 
         val_loss, val_metrics = self._validate_dataloader(validation_dataloader)
         self.val_metric_dict["loss"].append(val_loss)
-        for k in self.val_metric_dict.keys():
+        for k in val_metrics.keys():
             self.val_metric_dict[k].append(val_metrics[k])
 
         self.train()

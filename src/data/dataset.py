@@ -30,6 +30,10 @@ class BaseDataset(Dataset):
 
     def __len__(self):
         return self.dataset.shape[0]
+    
+    def get_num_labels(self):
+        num_labels = self.dataset["label"].nunique()
+        return num_labels
 
 class PretrainingDatasetForVerification(BaseDataset):
 
@@ -53,13 +57,13 @@ class FinetuningCheckworthinessDataset(BaseDataset):
 
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
-        return row["text"], torch.tensor(row["label"])
+        return row["text"], torch.tensor(row["label"], dtype=torch.float32)
 
 class FinetuningVerficationDataset(BaseDataset):
 
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
-        return (row["claim"], row["evidence"]), torch.tensor(row["label"])
+        return (row["claim"], row["evidence"]), torch.tensor(row["label"], dtype=torch.float32)
 
 # if __name__ == "__main__":
 #     #data = PretrainingDatasetForCheckworthiness(dataset_name="CT23", split="train")

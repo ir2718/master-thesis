@@ -13,6 +13,7 @@ from torch.nn.functional import (
 import random
 import torch
 import torch.nn as nn
+import os
 
 class ElectraLMHead(BaseLMHead):
 
@@ -221,12 +222,12 @@ class ElectraLMHead(BaseLMHead):
         return total_loss
 
     def save_head(self, step, save_path):
-        torch.save(self.gen_head, f"mlm_head_{step}")
+        torch.save(self.gen_head, os.path.join(save_path, f"mlm_head_{step}"))
         print()
         print(f"Saved the generative model to {save_path}")
         print()
 
-        torch.save(self.disc_head, f"disc_head_{step}")
+        torch.save(self.disc_head, os.path.join(save_path, f"disc_head_{step}"))
         print()
         print(f"Saved the discriminator head to {save_path}")
         print()

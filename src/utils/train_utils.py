@@ -16,7 +16,7 @@ def get_compute_metrics(dataset):
 
 def compute_metrics(eval_pred):
     preds, labels = eval_pred
-    preds = preds.argmax(axis=1)
+    preds = preds > 0
     return {
         "accuracy": accuracy_score(y_pred=preds, y_true=labels),
         "recall": recall_score(y_pred=preds, y_true=labels),

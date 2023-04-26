@@ -8,7 +8,10 @@ from torch.utils.data import DataLoader
 import torch
 
 args = parse_finetune_model()
-device = "cuda" if torch.cuda.is_available() else "cpu"
+if args.device_id is not None:
+    device = f"cuda:{args.device_id}"
+else:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 set_seed(args.seed)
 
 dataset_constructor = get_finetuning_dataset(args.dataset)
@@ -21,12 +24,14 @@ validation_dataset = dataset_constructor(
     split="validation"
 )
 
+num_labels = train_dataset.get_num_labels()
 model = FinetuneModel(
     model=args.model,
     model_path=args.model_path, 
     num_epochs=args.num_epochs, 
     experiment_name=args.experiment_name,
     metric=args.metric,
+    num_labels=num_labels,
     device=device, 
     distributed=args.distributed
 )

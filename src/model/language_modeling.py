@@ -5,7 +5,9 @@ from transformers import (
     BertTokenizer,
     ElectraConfig,
     ElectraForPreTraining,
-    AutoTokenizer
+    AutoTokenizer,
+    AutoModel,
+    AutoConfig
 )
 from src.utils.train_utils import batch_to_device
 from src.heads.electra import ElectraLMHead
@@ -36,17 +38,17 @@ class MultiTaskModel(nn.Module):
         self.experiment_name = experiment_name
         self.distributed = distributed
 
+
+        self.config = AutoConfig.from_pretrained(pretrained_model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name, config=self.config)    
+
         if pretrained_model_name == "google/electra-base-discriminator":
-            self.config = ElectraConfig.from_pretrained(pretrained_model_name)
-            self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)        
             self.model = ElectraForPreTraining.from_pretrained(
                 pretrained_model_name,
                 config=self.config,
             ).electra.to(device)
-        else:
-            self.config = BertConfig.from_pretrained(pretrained_model_name)
-            self.tokenizer = BertTokenizer.from_pretrained(pretrained_model_name)        
-            self.model = BertModel.from_pretrained(
+        else:   
+            self.model = AutoModel.from_pretrained(
                 pretrained_model_name,
                 config=self.config,
                 add_pooling_layer=False,
@@ -74,7 +76,6 @@ class MultiTaskModel(nn.Module):
     def forward(self, x):
         out = self.model(x)
         return [h(out) for h in self.heads]
-
     
 
     def forward_head(self, inputs, head):
@@ -146,7 +147,7 @@ class MultiTaskModel(nn.Module):
         self.init_metric_dict()
         self.train()
         num_epochs = (num_steps * gradient_accumulation_steps) // len(train_loaders[0]) + 1
-        effective_step, step = 0, 0
+        last_effective_step, effective_step, step = None, 0, 0
 
         pbar = tqdm(total=num_steps)
         for e in range(num_epochs):
@@ -169,7 +170,6 @@ class MultiTaskModel(nn.Module):
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad()
-                    step = 0
                     effective_step += 1
                     pbar.update(1)
 
@@ -180,19 +180,18 @@ class MultiTaskModel(nn.Module):
                     )
 
                 # calculate val loss and acc
-                if (effective_step + 1) % self.val_steps == 0 or (effective_step + 1) == num_steps:
+                if last_effective_step != effective_step and ((effective_step + 1) % self.val_steps == 0 or (effective_step + 1) == num_steps):
                     self.val_step(validation_loaders)
-                    
+                    last_effective_step = effective_step
+
                     # if its the best model so far
                     if self.val_metrics["loss"][-1] == min(self.val_metrics["loss"]):
                         self.save_model_and_heads(effective_step)
 
-                    if effective_step + 1 == num_steps:
+                    if (effective_step + 1) == num_steps:
                         pbar.close()
                         self.save_metrics()
                         return
-
-        pbar.close()
 
     def save_metrics(self):
         save_path = os.path.join("pretrained_models", f"{self.experiment_name}")
@@ -203,9 +202,12 @@ class MultiTaskModel(nn.Module):
 
         for k in self.val_metrics.keys():
             metrics[f"val_{k}"] = self.val_metrics[k]
-            
-        with open(os.path.join(save_path, "metrics.json", "w")) as fp:
-            json.dump(metrics, fp)
+
+        metrics_info = {k:v for k, v in metrics.items()}
+        metrics_info["val_steps"] = self.val_steps
+
+        with open(os.path.join(save_path, "metrics.json"), "w") as fp:
+            json.dump(metrics_info, fp)
 
 
     def val_step(self, validation_loaders):
