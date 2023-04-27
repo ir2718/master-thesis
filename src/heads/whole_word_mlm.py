@@ -28,7 +28,7 @@ class WholeWordMaskedLMHead(BaseLMHead):
             self.head = nn.DataParallel(self.head)
 
         self.wwm_probability = 0.15
-        self.name = "vanilla_wwm"
+        self.name = "mlm"
 
     def _whole_word_mask(self, input_tokens, max_predictions=512):
         cand_indexes = []

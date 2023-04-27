@@ -112,7 +112,8 @@ class MultiTaskModel(nn.Module):
 
         return outputs, labels, batch_loss
 
-    def _calculate_accuracy(self, d, x, y):
+    def _calculate_accuracy(self, x, y):
+        all_equal = []
         for i, (xi, yi) in enumerate(zip(x, y)):
             yi = yi.reshape(-1)
     
@@ -123,8 +124,8 @@ class MultiTaskModel(nn.Module):
                 preds = xi.view(-1) > 0 # unnormalized logits!
             
             equal = (preds == yi)[yi != -100].float()
-            d[self.heads[i].get_name()].append(equal.mean().item())
-        return d
+            all_equal.append(equal.mean().cpu().detach())
+        return torch.stack(all_equal)
 
     def init_metric_dict(self):
         self.train_metrics = {h.get_name():[] for h in self.heads}
@@ -149,21 +150,25 @@ class MultiTaskModel(nn.Module):
         num_epochs = (num_steps * gradient_accumulation_steps) // len(train_loaders[0]) + 1
         last_effective_step, effective_step, step = None, 0, 0
 
+        total_loss = 0
+        total_acc = torch.tensor([0. for _ in self.heads])
+
         pbar = tqdm(total=num_steps)
         for e in range(num_epochs):
             for i, batches in enumerate(zip(*train_loaders)):
 
                 # goes over multiple batches in case multiple loaders are used
                 train_loss_batch = 0
-                for b in batches:
+                train_acc_batch = torch.tensor([0. for _ in self.heads])
+                for j, b in enumerate(batches):
                     outputs, labels, train_loss = self._forward_batch(b)
                     train_loss_batch += train_loss.mean() / gradient_accumulation_steps
-                    self._calculate_accuracy(self.train_metrics, outputs, labels)
-
+                    acc = self._calculate_accuracy(outputs, labels) / gradient_accumulation_steps
+                    train_acc_batch[j] = acc[j]
+                
                 train_loss_batch.backward()
-                self.train_metrics["loss"].append(
-                    train_loss_batch.cpu().detach().item()
-                )
+                total_loss += train_loss_batch
+                total_acc += train_acc_batch
 
                 step += 1
                 if step % gradient_accumulation_steps == 0:
@@ -173,20 +178,25 @@ class MultiTaskModel(nn.Module):
                     effective_step += 1
                     pbar.update(1)
 
-                # calculate train loss and acc
-                if (effective_step + 1) % self.log_steps == 0:
+                    self.train_metrics["loss"].append(total_loss.cpu().detach().item())
+                    for j, h in enumerate(self.heads):
+                        self.train_metrics[h.get_name()].append(
+                            total_acc[j].cpu().detach().item()
+                        )
+
+
+                    total_loss = 0
+                    total_acc = torch.tensor([0. for _ in self.heads])
+
+                if (effective_step + 1) % self.log_steps == 0 and step % effective_step == 0:
                     self.log(
                         effective_step, self.train_metrics["loss"][-1], self._get_accs(self.train_metrics)
                     )
 
                 # calculate val loss and acc
-                if last_effective_step != effective_step and ((effective_step + 1) % self.val_steps == 0 or (effective_step + 1) == num_steps):
+                if ((effective_step + 1) % self.val_steps == 0 or (effective_step + 1) == num_steps) and step % effective_step == 0:
                     self.val_step(validation_loaders)
-                    last_effective_step = effective_step
-
-                    # if its the best model so far
-                    if self.val_metrics["loss"][-1] == min(self.val_metrics["loss"]):
-                        self.save_model_and_heads(effective_step)
+                    self.save_model_and_heads(effective_step)
 
                     if (effective_step + 1) == num_steps:
                         pbar.close()
@@ -226,10 +236,13 @@ class MultiTaskModel(nn.Module):
         with torch.no_grad():
             for i, batches in tqdm(enumerate(zip(*validation_loaders))):
                 val_loss_batch = 0
-                for b in batches:
+                for j, b in enumerate(batches):
                     outputs, labels, val_loss = self._forward_batch(b)
                     val_loss_batch += val_loss.mean()
-                    self._calculate_accuracy(val_accs_curr, outputs, labels)
+                    acc = self._calculate_accuracy(outputs, labels)
+                    val_accs_curr[self.heads[j].get_name()].append(
+                        acc[j].cpu().detach().item()
+                    )
 
                 val_losses.append(val_loss_batch.cpu().detach().item())
                 
@@ -273,32 +286,3 @@ class MultiTaskModel(nn.Module):
         print()
         for h in self.heads:
             h.save_head(step, save_path)
-
-
-
-if __name__ == "__main__":
-    #dataset = get_dataset("CT23")
-    #dataloader = DataLoader(
-    #    dataset, batch_size=2, collate_fn=collate_fn
-    #)
-    model_name = "bert-base-cased"
-    pretrain_type = "vanilla_wwm"
-    head = get_LM_head(model_name, pretrain_type, wwm_probability=0.15)
-    #model = MultiTaskModel(
-    #    model_name,
-    #    [head],
-    #    10, 100
-    #)
-
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-    inputs, labels = head.mask_tokens(
-        tokenizer(
-            "Today might be a good day for pretraining.", 
-            return_tensors="pt"
-        )["input_ids"]
-    )
-
-    print(tokenizer.convert_ids_to_tokens(inputs[0]))
-    print(tokenizer.convert_ids_to_tokens(labels[0]))
-    #model.train(2, dataloader, dataloader, 1, 1)
