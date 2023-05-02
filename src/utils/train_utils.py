@@ -7,10 +7,10 @@ from sklearn.metrics import f1_score, accuracy_score, recall_score, precision_sc
 
 def get_compute_metrics(dataset):
     MAPPING_COMPUTE_METRICS = {
-        "CT23": compute_metrics,
-        "CT21": compute_metrics,
+        "CT23": compute_metrics_multiclass,
+        "CT21": compute_metrics_multiclass,
         "FEVER": compute_metrics_multiclass,
-        "covidFACT": compute_metrics,
+        "covidFACT": compute_metrics_multiclass,
     }
     return MAPPING_COMPUTE_METRICS[dataset]
 

@@ -112,19 +112,10 @@ def _load_covidFACT_dataset(path=os.path.join("./data", "verification", "covidfa
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
-def _get_tokenizer(type_):
-    d = {
-        "wwm_mlm": (BertTokenizer, BertConfig),
-        "wwm_electra": (ElectraTokenizer, ElectraConfig),
-        "shuffle_random": (BertTokenizer, BertConfig)
-    }
-    return d[type_]
-
 class PretrainingCollator:
-    def __init__(self, model_name, type_):
-        tokenizer, config = _get_tokenizer(type_)
-        self.config = config()
-        self.tokenizer = tokenizer.from_pretrained(
+    def __init__(self, model_name):
+        self.config = AutoConfig.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, config=self.config
         )
 

@@ -54,17 +54,27 @@ optimizer = get_optimizer(
     weight_decay=args.weight_decay,
 )
 model.set_optimizer(optimizer)
-
 scheduler = get_scheduler(
     optimizer, args.scheduler,
     warmup_ratio=args.warmup_ratio,
-    num_steps=(args.num_epochs * len(train_dataloader) // args.gradient_accumulation_steps) + 1,
+    num_steps=args.num_epochs * ( int(len(train_dataloader.dataset) // (args.train_batch_size * args.gradient_accumulation_steps)) + 1),
 )
 model.set_scheduler(scheduler)
-
 model.train_loop(
     train_dataloader=train_dataloader, 
     validation_dataloader=validation_dataloader, 
     num_epochs=args.num_epochs, 
     gradient_accumulation_steps=args.gradient_accumulation_steps
 )
+
+test_dataset = dataset_constructor(
+    dataset_name=args.dataset, 
+    split="test"
+)
+test_dataloader = DataLoader(
+    test_dataset, 
+    batch_size=args.val_batch_size, 
+    collate_fn=c.collate_fn
+)
+model = model.load_best_model()
+model.test(test_dataloader)

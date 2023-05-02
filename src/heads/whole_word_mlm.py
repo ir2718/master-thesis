@@ -1,8 +1,8 @@
 from src.heads.base_head import BaseLMHead
 from transformers import (
-    BertConfig,
-    BertTokenizer,
-    BertForMaskedLM,
+    AutoConfig,
+    AutoTokenizer,
+    AutoModelForMaskedLM,
 )
 from torch.nn.functional import cross_entropy
 import torch.nn as nn
@@ -17,13 +17,18 @@ class WholeWordMaskedLMHead(BaseLMHead):
         super().__init__(head_model_name, **kwargs)
         self.device = device
 
-        self.config = BertConfig.from_pretrained(head_model_name)
-        self.tokenizer = BertTokenizer.from_pretrained(head_model_name)
-        self.head = BertForMaskedLM.from_pretrained(
+        self.config = AutoConfig.from_pretrained(head_model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(head_model_name)
+        self.head = AutoModelForMaskedLM.from_pretrained(
             head_model_name,
             config=self.config
-        ).cls.to(self.device)
+        )
         
+        if head_model_name == "bert-base-cased":
+            self.head = self.head.cls.to(self.device)
+        elif head_model_name == "roberta-base":
+            self.head = self.head.lm_head.to(self.device)
+
         if distributed:
             self.head = nn.DataParallel(self.head)
 

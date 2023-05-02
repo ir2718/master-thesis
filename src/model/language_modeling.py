@@ -148,7 +148,7 @@ class MultiTaskModel(nn.Module):
         self.init_metric_dict()
         self.train()
         num_epochs = (num_steps * gradient_accumulation_steps) // len(train_loaders[0]) + 1
-        last_effective_step, effective_step, step = None, 0, 0
+        effective_step, step = 0, 0
 
         total_loss = 0
         total_acc = torch.tensor([0. for _ in self.heads])

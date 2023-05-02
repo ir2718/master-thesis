@@ -4,8 +4,10 @@ from transformers import (
     ElectraConfig,
     AutoTokenizer,
     AutoConfig,
-    AutoModel
+    AutoModel,
+    AutoModelForSequenceClassification
 )
+from transformers.models.bert.modeling_bert import BertPooler
 from abc import abstractmethod
 from src.utils.train_utils import compute_metrics, compute_metrics_multiclass, batch_to_device
 import numpy as np
@@ -24,27 +26,33 @@ class FinetuneModel(nn.Module):
         self.metric = metric
         self.device = device
         self.distributed = distributed
+        self.save_dir = os.path.join("models", "pretrained_finetuned")
 
         self.config = AutoConfig.from_pretrained(model)
         self.tokenizer = AutoTokenizer.from_pretrained(model)        
         self.model = torch.load(model_path).to(self.device)
-        self.pooler = nn.Sequential(
-            nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=True),
-            nn.Tanh(),
-            nn.Dropout(p=self.config.hidden_dropout_prob, inplace=False),
-        ).to(self.device)
+
+        self.num_labels = num_labels
+
+        backbone_children = list(AutoModelForSequenceClassification.from_pretrained(
+            model, 
+            num_labels=self.num_labels
+        ).children())
+
+        cls_head = []
+        if model == "bert-base-cased":
+            cls_head.append(backbone_children[0].pooler)
+        cls_head.extend(backbone_children[1:])
+        self.cls = nn.Sequential(*cls_head)
 
         if self.distributed:
             self.model = torch.nn.DataParallel(self.model)
-            self.pooler = torch.nn.DataParallel(self.pooler)
-
-        self.num_labels = num_labels - 1 if num_labels == 2 else num_labels
-
-        self.cls = nn.Linear(self.config.hidden_size, self.num_labels).to(self.device)
-        if self.distributed:
             self.cls = torch.nn.DataParallel(self.cls)
+        else:
+            self.model = self.model.to(device)
+            self.cls = self.cls.to(device)
 
-        self.loss = nn.BCEWithLogitsLoss() if self.num_labels == 1 else nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss()
         self.compute_metrics = compute_metrics if self.num_labels == 1 else compute_metrics_multiclass
 
         self.callbacks = []
@@ -61,9 +69,8 @@ class FinetuneModel(nn.Module):
         self.callbacks = callbacks
     
     def forward(self, x):
-        out = self.model(**x).last_hidden_state[:, 0, :] # get [CLS] from B, seq_len, hidden_dim
-        out = self.pooler(out)
-        out = self.cls(out)
+        out = self.model(**x).last_hidden_state
+        out = self.cls(out) # this takes care of taking out the [CLS] token representation
         if self.num_labels == 1:
             out = out.view(-1)
         return out
@@ -83,7 +90,6 @@ class FinetuneModel(nn.Module):
         self.train()
         self.init_metric_dict()
 
-        metric = None
         running_loss = []
         step, total_loss = 0, 0.0
         pbar = tqdm(total=num_epochs * len(train_dataloader))
@@ -97,7 +103,7 @@ class FinetuneModel(nn.Module):
 
                 if not self.distributed:
                     tokenized_texts = batch_to_device(tokenized_texts, self.device)
-                    labels = labels.to(self.device)
+                    labels = labels.to(self.device).long()
 
                 out = self.forward(tokenized_texts)
 
@@ -120,8 +126,8 @@ class FinetuneModel(nn.Module):
             self.validate(train_dataloader, validation_dataloader)
             self.log_metrics(e)
 
-            if metric is None or max(self.val_metric_dict) == self.val_metric_dict[-1]:
-                self.save_model(e)
+            if max(self.val_metric_dict[self.metric]) == self.val_metric_dict[self.metric][-1]:
+                self.save_best_model(e)
 
             for c in self.callbacks:
                 c.on_epoch_end()
@@ -129,11 +135,11 @@ class FinetuneModel(nn.Module):
 
         self.save_metrics(running_loss)
         pbar.close()
-                
+
         self.eval()
 
     def save_metrics(self, running_loss):
-        save_path = os.path.join("models", f"{self.experiment_name}")
+        save_path = os.path.join(self.save_dir, f"{self.experiment_name}")
         
         metrics = dict()
         for k in self.train_metric_dict.keys():
@@ -147,11 +153,15 @@ class FinetuneModel(nn.Module):
         with open(os.path.join(save_path, "metrics.json"), "w") as fp:
             json.dump(metrics, fp)
 
+    def load_best_model(self):
+        return torch.load(self.best_model_path)
 
-    def save_model(self, epoch):
-        save_path = os.path.join("./models", f"{self.experiment_name}")
+    def save_best_model(self, epoch):
+        save_path = os.path.join(self.save_dir, f"{self.experiment_name}")
         os.makedirs(save_path, exist_ok=True)
-        torch.save(self, os.path.join(save_path, f"best_model_{epoch}"))
+        model_save_path = os.path.join(save_path, f"best_model_{epoch}")
+        self.best_model_path = model_save_path
+        torch.save(self, model_save_path)
         print()
         print(f"Saved model at epoch {epoch}")
         print()
@@ -171,7 +181,7 @@ class FinetuneModel(nn.Module):
 
             if not self.distributed:
                 tokenized_texts = batch_to_device(tokenized_texts, self.device)
-                labels_step = labels_step.to(self.device)
+                labels_step = labels_step.to(self.device).long()
 
             out = self.forward(tokenized_texts)
             loss = self.loss(out, labels_step)
@@ -199,6 +209,13 @@ class FinetuneModel(nn.Module):
             self.val_metric_dict[k].append(val_metrics[k])
 
         self.train()
+
+    def test(self, test_dataloader):
+        _, test_metrics = self._validate_dataloader(test_dataloader)
+        save_path = os.path.join(self.save_dir, f"{self.experiment_name}")
+
+        with open(os.path.join(save_path, "test_metrics.json"), "w") as fp:
+            json.dump(test_metrics, fp)
 
     @abstractmethod
     def tokenize_function(self, texts):
