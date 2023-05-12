@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 from src.utils.data_utils import get_dataset
 import torch
+import spacy
 
 def get_pretraining_dataset(dataset_name):
     d = {
@@ -23,10 +24,15 @@ def get_finetuning_dataset(dataset_name):
 
 class BaseDataset(Dataset):
     
-    def __init__(self, dataset_name, split):
+    def __init__(self, dataset_name, split, calculate_spacy_features=True):
         data = get_dataset(dataset_name)[0][split]
         self.dataset = data.to_pandas()
         self.has_label = "label" in self.dataset.columns.tolist()
+
+        if calculate_spacy_features:
+            spacy.prefer_gpu()
+            self.spacy_model = spacy.load("en_core_web_trf")
+
 
     def __len__(self):
         return self.dataset.shape[0]
