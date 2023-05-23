@@ -1,17 +1,11 @@
 from transformers import set_seed, TrainingArguments, Trainer, DataCollatorWithPadding
 import os
+from accelerate import Accelerator
 from src.parser.parser import parse_finetune_baseline
 from src.utils.model_utils import load_hf_model
-from src.utils.train_utils import get_compute_metrics, tokenize_dataset 
+from src.utils.train_utils import get_compute_metrics, tokenize_dataset, test_hf_trainer
 from src.utils.data_utils import get_dataset, get_num_labels
 import json
-
-def test_hf_trainer(trainer, test_dataset, save_dir):
-    test_res = trainer.predict(test_dataset, metric_key_prefix="test")
-    test_metrics = test_res.metrics
-
-    with open(os.path.join(save_dir, "test_metrics.json"), "w") as fp:
-        json.dump(test_metrics, fp)
 
 args = parse_finetune_baseline()
 set_seed(args.seed)
@@ -19,11 +13,11 @@ set_seed(args.seed)
 dataset_dict, type_ = get_dataset(args.dataset)
 num_labels = get_num_labels(dataset_dict)
 
-model, tokenizer, config = load_hf_model(args.model, num_labels, use_fast=False)
+model, tokenizer, config = load_hf_model(args.model, num_labels, use_fast=False, not_pretrained=args.no_pretrained)
 dataset_dict = tokenize_dataset(dataset_dict, tokenizer, type_)
 data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
-save_dir = os.path.join("models", "baselines", type_, args.dataset, args.model)
+save_dir = os.path.join("models", "baselines_reinitialized" if args.no_pretrained else "baselines", type_, args.dataset, args.model)
 training_args = TrainingArguments(
     output_dir=save_dir,
     evaluation_strategy="epoch",

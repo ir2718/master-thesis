@@ -1,6 +1,6 @@
 from src.parser.parser import parse_pretraining_model
 from src.data.dataset import get_pretraining_dataset
-from src.model.language_modeling import MultiTaskModel
+from src.model.language_modeling import PretrainingModel
 from src.utils.model_utils import get_optimizer, get_scheduler
 from src.utils.train_utils import set_seed
 from src.utils.data_utils import PretrainingCollator
@@ -21,24 +21,17 @@ validation_dataset = dataset_constructor(
     split="validation"
 )
 
-collators = [
-    PretrainingCollator(model_name=args.model, type_=type_) for type_ in args.modeling_type
-]
+collator = PretrainingCollator(model_name=args.model)
+train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, collate_fn=collator.collate_fn, shuffle=True)
+validation_loader = DataLoader(validation_dataset, batch_size=args.val_batch_size, collate_fn=collator.collate_fn)
 
-train_loaders = [
-    DataLoader(train_dataset, batch_size=args.train_batch_size, collate_fn=c.collate_fn) for c in collators
-]
-validation_loaders = [
-    DataLoader(validation_dataset, batch_size=args.val_batch_size, collate_fn=c.collate_fn) for c in collators
-]
-
-model = MultiTaskModel(
+model = PretrainingModel(
     pretrained_model_name=args.model, 
     val_steps=args.val_steps,
     log_steps=args.log_steps,
     val_log_steps=args.val_log_steps,
     experiment_name=args.experiment_name,
-    modeling_types=args.modeling_type,
+    modeling_type=args.modeling_type,
     distributed=args.distributed,
     device=device
 )
@@ -57,8 +50,8 @@ scheduler = get_scheduler(
 
 model.train_loop(
     num_steps=args.num_steps, 
-    train_loaders=train_loaders, 
-    validation_loaders=validation_loaders, 
+    train_loader=train_loader, 
+    validation_loader=validation_loader, 
     optimizer=optimizer, 
     scheduler=scheduler,
     gradient_accumulation_steps=args.gradient_accumulation_steps

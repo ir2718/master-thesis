@@ -2,12 +2,7 @@ import pandas as pd
 import os
 from datasets import DatasetDict, Dataset, load_dataset
 from transformers import (
-    BertTokenizer, 
-    ElectraTokenizer,
-    BertConfig,
-    ElectraConfig,
     AutoTokenizer,
-    AutoModel,
     AutoConfig
 )
 import numpy as np
@@ -39,9 +34,9 @@ def _make_dict(train, validation, test):
 
 def _load_CT23_dataset(path=os.path.join("./data", "checkworthiness", "CT23_1B_checkworthy_english")):
     dataset_paths = [
-        "CT23_1C_checkworthy_english_train.tsv",
-        "CT23_1C_checkworthy_english_dev.tsv",
-        "CT23_1B_checkworthy_english_dev_test.tsv",
+        "CT23_1B_checkworthy_english_train.tsv",
+        "CT23_1B_checkworthy_english_dev.tsv",
+        "CT23_1B_checkworthy_english_test_gold.tsv",
     ]
     dfs = [pd.read_csv(os.path.join(path, p), sep="\t") for p in dataset_paths]
     for i, d in enumerate(dfs):
@@ -91,7 +86,6 @@ def _load_FEVER_dataset(path=os.path.join("./data", "verification", "FEVER"), sa
             "NOT ENOUGH INFO": 2
         }, inplace=True)
         dfs[i]["evidence"] = d["evidence"].map(lambda x: [i[-1] for i in x])
-        print(i, d.dtypes)        
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 
@@ -108,7 +102,6 @@ def _load_covidFACT_dataset(path=os.path.join("./data", "verification", "covidfa
             "SUPPORTED": 1,
         }, inplace=True)
 
-        print(i, d.dtypes)        
     hf_dfs = _make_dict(*dfs)
     return hf_dfs
 

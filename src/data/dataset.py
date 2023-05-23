@@ -1,5 +1,7 @@
 from torch.utils.data import Dataset
 from src.utils.data_utils import get_dataset
+from functools import partial
+from tqdm import tqdm
 import torch
 import spacy
 
@@ -24,15 +26,10 @@ def get_finetuning_dataset(dataset_name):
 
 class BaseDataset(Dataset):
     
-    def __init__(self, dataset_name, split, calculate_spacy_features=True):
+    def __init__(self, dataset_name, split):
         data = get_dataset(dataset_name)[0][split]
         self.dataset = data.to_pandas()
         self.has_label = "label" in self.dataset.columns.tolist()
-
-        if calculate_spacy_features:
-            spacy.prefer_gpu()
-            self.spacy_model = spacy.load("en_core_web_trf")
-
 
     def __len__(self):
         return self.dataset.shape[0]
@@ -43,8 +40,8 @@ class BaseDataset(Dataset):
 
 class PretrainingDatasetForVerification(BaseDataset):
 
-    def __init__(self, dataset_name, split):
-        super().__init__(dataset_name, split)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
@@ -52,13 +49,15 @@ class PretrainingDatasetForVerification(BaseDataset):
 
 class PretrainingDatasetForCheckworthiness(BaseDataset):
 
-    def __init__(self, dataset_name, split):
-        super().__init__(dataset_name, split)
-
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
     def __getitem__(self, idx):
         row = self.dataset.iloc[idx]
         return row["text"]
 
+
+# ADD SPACY CALCULATION FOR FINETUNING
 class FinetuningCheckworthinessDataset(BaseDataset):
 
     def __getitem__(self, idx):

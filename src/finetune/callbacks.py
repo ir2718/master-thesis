@@ -9,7 +9,7 @@ class BaseEpochCallback:
         pass
 
 
-# unfreezes the pooling layer and cls at unfreeze epoch
+# unfreezes the backbone at unfreeze epoch, at the beggining pooler and cls get unfrozen
 # unfreeze epoch is a number in {1, 2, ..., num_epochs - 1} 
 # 0 doesnt make sense, just dont use the callback
 class FrozenHeadCallback(BaseEpochCallback):

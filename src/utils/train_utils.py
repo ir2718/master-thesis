@@ -3,6 +3,7 @@ import numpy as np
 import random
 import torch
 import os
+import json
 from sklearn.metrics import f1_score, accuracy_score, recall_score, precision_score
 
 def get_compute_metrics(dataset):
@@ -49,6 +50,13 @@ def _tokenize_veracity(x, **kwargs):
     l = [f"{i} {kwargs['tokenizer'].sep_token}" + f" {kwargs['tokenizer'].sep_token} ".join(j) for i, j in zip(x["claim"], x["evidence"])]
     tokenized  = _tokenize(text=l, **kwargs)
     return tokenized
+
+def test_hf_trainer(trainer, test_dataset, save_dir):
+    test_res = trainer.predict(test_dataset, metric_key_prefix="test")
+    test_metrics = test_res.metrics
+
+    with open(os.path.join(save_dir, "test_metrics.json"), "w") as fp:
+        json.dump(test_metrics, fp)
 
 # def _tokenize_veracity_with_special(x):
 #     s = " [SEP_EVIDENCE]"

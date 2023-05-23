@@ -72,9 +72,16 @@ class ShuffleRandomLMHead(BaseLMHead):
         return manipulated_input_ids, shuffle_random_mask
     
     def get_loss(self, x, y):
+        x_view = x.view(-1, ShuffleRandomLMHead.NUM_CLASSES)
+        y_view = y.view(-1)
+
         # this is why -100 is used for tokens that dont go into loss
+        mask = y_view != -100
+        x_selected = x_view[mask]
+        y_selected = y_view[mask]
+
         shuffle_random_loss = cross_entropy(
-            x.view(-1, 3), y.view(-1), ignore_index=-100
+            x_selected, y_selected, reduction="none", ignore_index=-100
         )
         return shuffle_random_loss
     

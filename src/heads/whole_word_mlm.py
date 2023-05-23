@@ -10,7 +10,6 @@ import torch
 import os
 import random
 
-
 class WholeWordMaskedLMHead(BaseLMHead):
 
     def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
@@ -23,6 +22,8 @@ class WholeWordMaskedLMHead(BaseLMHead):
             head_model_name,
             config=self.config
         )
+
+        self.head_model_name = self.head_model_name
         
         if head_model_name == "bert-base-cased":
             self.head = self.head.cls.to(self.device)
@@ -35,12 +36,31 @@ class WholeWordMaskedLMHead(BaseLMHead):
         self.wwm_probability = 0.15
         self.name = "mlm"
 
-    def _whole_word_mask(self, input_tokens, max_predictions=512):
+    def _group_subwords_roberta(self, input_tokens):
         cand_indexes = []
 
         # go over all the tokens in the input sequence
         for i, token in enumerate(input_tokens):
-            if token == "[CLS]" or token == "[SEP]":
+            if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
+                continue
+
+            # group subword tokens into words as a nested list
+            if len(cand_indexes) == 0 or \
+                token.startswith("Ġ") or \
+                token == self.tokenizer.pad_token or \
+                token in [".", "!", "?", "...", ","]:
+                cand_indexes.append([i])
+            else:
+                cand_indexes[-1].append(i)
+
+        return cand_indexes
+
+    def _group_subwords_bert(self, input_tokens):
+        cand_indexes = []
+
+        # go over all the tokens in the input sequence
+        for i, token in enumerate(input_tokens):
+            if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
                 continue
 
             # group subword tokens into words as a nested list
@@ -48,6 +68,17 @@ class WholeWordMaskedLMHead(BaseLMHead):
                 cand_indexes[-1].append(i)
             else:
                 cand_indexes.append([i])
+
+        return cand_indexes
+    
+    def _group_subwords(self, input_tokens):
+        if self.head_model_name == "bert-base-cased":
+            return self._group_subwords_bert(input_tokens)
+        elif self.head_model_name == "roberta-base":
+            return self._group_subwords_roberta(input_tokens)
+
+    def _whole_word_mask(self, input_tokens, max_predictions=512):
+        cand_indexes = self._group_subwords(input_tokens)
 
         # randomize the order of the nested subwords (whole words)
         # calculate number of predictions given probability
@@ -116,44 +147,42 @@ class WholeWordMaskedLMHead(BaseLMHead):
         # copy the existing inputs and treat as labels
         labels = inputs.clone()
 
-        # take care of special tokens such as [CLS] and [SEP]
-        special_tokens_mask = [
-            self.tokenizer.get_special_tokens_mask(x, already_has_special_tokens=True) for x in labels
-        ]
-
-        # in case there a special token has been chosen for masking, do not use it
         probability_matrix = mask_labels
-        probability_matrix.masked_fill_(
-            torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0
-        )
-
-        # make sure [PAD] tokens arent used in masking
+        special_tokens_mask = [
+            self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+        ]
+        probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
         if self.tokenizer._pad_token is not None:
             padding_mask = labels.eq(self.tokenizer.pad_token_id)
             probability_matrix.masked_fill_(padding_mask, value=0.0)
-        
-        masked_indices = probability_matrix.bool()
-        labels[~masked_indices] = -100 # only compute the loss for masked tokens
 
-        # 80% of the time, replace the tokens with [MASK]
+        masked_indices = probability_matrix.bool()
+        labels[~masked_indices] = -100  # We only compute loss on masked tokens
+
+        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
         indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
         inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
-        
-        # 10% of the time, replace the token with a random token
-        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-        random_words = torch.randint(
-            len(self.tokenizer), labels.shape, dtype=torch.long # generate random word idx
-        )
-        inputs[indices_random] = random_words[indices_random] 
 
-        # 10% of the time do nothing
+        # 10% of the time, we replace masked input tokens with random word
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        # The rest of the time (10% of the time) we keep the masked input tokens unchanged
         return inputs, labels
 
     # the default loss function for masked language modeling
     def get_loss(self, x, y):
+        x_view = x.view(-1, self.tokenizer.vocab_size)
+        y_view = y.view(-1)
+
         # this is why -100 is used for tokens that dont go into loss
+        mask = y_view != -100
+        x_selected = x_view[mask]
+        y_selected = y_view[mask]
+
         masked_lm_loss = cross_entropy(
-            x.view(-1, self.tokenizer.vocab_size), y.view(-1), ignore_index=-100
+            x_selected, y_selected, reduction="none"
         )
         return masked_lm_loss
     

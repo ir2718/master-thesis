@@ -8,6 +8,7 @@ from torch.nn.functional import cross_entropy
 import torch.nn as nn
 import torch
 import os
+from spacy import load, prefer_gpu
 import random
 
 
@@ -24,6 +25,9 @@ class SelectiveMaskedLMHead(BaseLMHead):
             config=self.config
         )
         
+        self.spacy_model = load("en_core_web_lg")
+        print(f"Spacy using gpu: {prefer_gpu()}")
+        
         if head_model_name == "bert-base-cased":
             self.head = self.head.cls.to(self.device)
         elif head_model_name == "roberta-base":
@@ -33,42 +37,225 @@ class SelectiveMaskedLMHead(BaseLMHead):
             self.head = nn.DataParallel(self.head)
 
         self.wwm_probability = 0.15
+        self.other_probability = 0.2
         self.name = "mlm"
 
-    def _whole_word_mask(self, input_tokens, max_predictions=512):
-        cand_indexes = []
+    def _reconstruct_text(self, tokens):
+        if self.head_model_name == "bert-base-cased":
+            return self._reconstruct_text_bert(tokens)
+        elif self.head_model_name == "roberta-base":
+            return self._reconstruct_text_roberta(tokens)
 
-        # go over all the tokens in the input sequence
-        for i, token in enumerate(input_tokens):
-            if token == "[CLS]" or token == "[SEP]":
+    def _reconstruct_text_roberta(self, tokens):
+        reconstructed_text = ""
+        for i, token in enumerate(tokens):
+            if token in [self.tokenizer.pad_token, self.tokenizer.cls_token, self.tokenizer.sep_token]:
                 continue
 
-            # group subword tokens into words as a nested list
-            if len(cand_indexes) >= 1 and token.startswith("##"):
-                cand_indexes[-1].append(i)
+            if token.startswith("Ġ"):
+                token = token[1:]
+                reconstructed_text += " " + token
+            elif len(reconstructed_text) == 0:
+                reconstructed_text += " " + token
             else:
-                cand_indexes.append([i])
+                reconstructed_text += token
 
-        # randomize the order of the nested subwords (whole words)
-        # calculate number of predictions given probability
-        random.shuffle(cand_indexes)
-        num_to_predict = min(
+        return reconstructed_text.strip()
+    
+    def _reconstruct_text_bert(self, tokens):
+        reconstructed_text = ""
+        for i, token in enumerate(tokens):
+            if token in [self.tokenizer.pad_token, self.tokenizer.cls_token, self.tokenizer.sep_token]:
+                continue
+
+            if token.startswith("##"):
+                token = token[2:]
+                reconstructed_text += token
+            else:
+                reconstructed_text += " " + token
+
+        return reconstructed_text.strip()
+
+    def _find_words_of_interest(self, text):
+        indices, words_of_interest = [], []
+        for i, token in enumerate(self.spacy_model(text)):
+            # check if its a named entity, number, predicate, subject or object
+            if token.ent_type_ != "" or token.like_num \
+                or (token.dep_ == "ROOT" and token.pos_ == "VERB") \
+                or (token.dep_ in ["nsubj", "csubj", "nsubjpass", "expl"]) \
+                or (token.dep_ in ["dobj", "iobj", "pobj", "acomp", "xcomp"]):
+                indices.append(i+1) # add one because of [CLS] token
+                words_of_interest.append(token.text)
+        return indices, words_of_interest
+
+    def _group_subwords_roberta(self, input_tokens, indices, words_of_interest):
+        cand_indexes_selected, cand_indexes_other = [], []
+        len_selected = 0
+
+        punctuation = [".", "!", "?", "...", ","]
+
+        # go over all the tokens in the input sequence
+        num_tokens = len(input_tokens)
+        i = 0
+        while i < num_tokens:
+            token = input_tokens[i]
+
+            if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
+                i += 1
+                continue
+
+            if i == 1 or token.startswith("Ġ") or token.startswith("'") or token in punctuation or token == self.tokenizer.pad_token or token[0].isdigit():
+                word_tokens, word_indices = [], []
+                word_indices.append(i)
+                word_tokens.append(token)
+
+                j = i + 1
+                while j < num_tokens:
+                    next_token = input_tokens[j]
+                    if not next_token.startswith("Ġ") and not next_token.startswith("'") and next_token not in punctuation \
+                        and next_token not in [self.tokenizer.cls_token, self.tokenizer.sep_token, self.tokenizer.pad_token] \
+                        and not next_token[0].isdigit():
+                        word_indices.append(j)
+                        word_tokens.append(next_token)
+                        j += 1
+                    else:
+                        break
+
+                full_word = "".join(word_tokens)
+                if full_word[0] == "Ġ":
+                    full_word = full_word[1:]
+
+                if full_word in words_of_interest:
+                    cand_indexes_selected.append(word_indices)
+                    len_selected += len(word_tokens)
+                    indices = indices[1:]
+                else:
+                    cand_indexes_other.append(word_indices)
+                
+                i = j
+
+        return cand_indexes_selected, cand_indexes_other, len_selected
+    
+    def _group_subwords_bert(self, input_tokens, indices, words_of_interest):
+        cand_indexes_selected, cand_indexes_other = [], []
+        len_selected = 0
+
+        punctuation = [".", "!", "?", "...", ","]
+
+        # go over all the tokens in the input sequence
+        num_tokens = len(input_tokens)
+        i = 0
+        while i < num_tokens:
+            token = input_tokens[i]
+
+            if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
+                i += 1
+                continue
+
+            if not token.startswith("##"):
+                word_tokens, word_indices = [], []
+                word_indices.append(i)
+                word_tokens.append(token)
+
+                j = i + 1
+                while j < num_tokens:
+                    next_token = input_tokens[j]
+                    if next_token.startswith("##"):
+                        word_indices.append(j)
+                        word_tokens.append(next_token[2:])
+                        j += 1
+                    else:
+                        break
+
+                full_word = "".join(word_tokens)
+
+                if full_word in words_of_interest:
+                    cand_indexes_selected.append(word_indices)
+                    len_selected += len(word_tokens)
+                    indices = indices[1:]
+                else:
+                    cand_indexes_other.append(word_indices)
+                
+                i = j
+
+        return cand_indexes_selected, cand_indexes_other, len_selected
+
+    
+    def _group_subwords(self, input_tokens, indices, words_of_interest):
+        if self.head_model_name == "bert-base-cased":
+            return self._group_subwords_bert(input_tokens, indices, words_of_interest)
+        elif self.head_model_name == "roberta-base":
+            return self._group_subwords_roberta(input_tokens, indices, words_of_interest)
+
+    def _whole_word_mask(self, input_tokens, max_predictions=512):
+        reconstructed_text = self._reconstruct_text(input_tokens)
+        indices, words_of_interest = self._find_words_of_interest(reconstructed_text)
+
+        cand_indexes_selected, cand_indexes_other, len_selected = self._group_subwords(input_tokens, indices, words_of_interest,)
+
+        random.shuffle(cand_indexes_selected)
+        random.shuffle(cand_indexes_other)
+
+        # if there is more than 80% * wwm_probability available selected tokens
+        # use 20% random tokens to make sure it doesnt do catastrophic forgetting
+        num_tokens = len(input_tokens) 
+        perc_selected = len_selected / num_tokens
+        if perc_selected > self.wwm_probability  * (1 - self.other_probability): 
+            k = int(len(input_tokens) * self.wwm_probability  * (1 - self.other_probability))
+            cand_indexes_other.extend(cand_indexes_selected[k:])
+            cand_indexes_selected = cand_indexes_selected[:k]
+
+        selected_to_predict = int(round(len_selected * self.wwm_probability))
+        other_to_predict = int(round((num_tokens - len_selected) * self.wwm_probability))
+
+        num_to_predict_selected = min(
             max_predictions, 
-            max(1, int(round(len(input_tokens) * self.wwm_probability)))
+            max(1, int(round(selected_to_predict)))
         )
-        
+
+        num_to_predict_other = min(
+            max_predictions, 
+            max(1, int(round(other_to_predict)))
+        )
+
         masked_lms = []
         covered_indexes = set()
         
         # go over all the indices that make up words
-        for index_set in cand_indexes:
+        for index_set in (cand_indexes_selected):
 
             # if theres already too many masked words
-            if len(masked_lms) >= num_to_predict:
+            if len(masked_lms) >= num_to_predict_selected:
                 break
 
             # if adding this word creates too many masked words 
-            if len(masked_lms) + len(index_set) > num_to_predict:
+            if len(masked_lms) + len(index_set) > num_to_predict_selected:
+                continue
+
+            is_any_index_covered = False
+            for index in index_set:
+                if index in covered_indexes:
+                    is_any_index_covered = True
+                    break
+            
+            if is_any_index_covered:
+                continue
+            
+            # otherwise add the word to masking procedure
+            for index in index_set:
+                covered_indexes.add(index)
+                masked_lms.append(index)
+
+
+        # go over all the indices that make up words
+        for index_set in (cand_indexes_other):
+
+            # if theres already too many masked words
+            if len(masked_lms) >= num_to_predict_other:
+                break
+
+            # if adding this word creates too many masked words 
+            if len(masked_lms) + len(index_set) > num_to_predict_other:
                 continue
 
             is_any_index_covered = False
@@ -148,6 +335,10 @@ class SelectiveMaskedLMHead(BaseLMHead):
 
         # 10% of the time do nothing
         return inputs, labels
+
+    def set_feature_positions(self, train_positions, validation_positions):
+        self.train_positions = train_positions
+        self.validation_positions = validation_positions
 
     # the default loss function for masked language modeling
     def get_loss(self, x, y):
