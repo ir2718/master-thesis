@@ -176,7 +176,7 @@ class FinetuneModel(nn.Module):
     @torch.no_grad()
     def _validate_dataloader(self, dataloader):
         losses, outs, labels = [], [], []
-        for i, b in enumerate(dataloader):
+        for b in dataloader:
             tokenized_texts, labels_step = b
 
             if not self.distributed:
@@ -210,11 +210,11 @@ class FinetuneModel(nn.Module):
 
         self.train()
 
-    def test(self, test_dataloader):
+    def test(self, test_dataloader, prefix="test"):
         _, test_metrics = self._validate_dataloader(test_dataloader)
         save_path = os.path.join(self.save_dir, f"{self.experiment_name}")
 
-        with open(os.path.join(save_path, "test_metrics.json"), "w") as fp:
+        with open(os.path.join(save_path, f"{prefix}_metrics.json"), "w") as fp:
             json.dump(test_metrics, fp)
 
     @abstractmethod

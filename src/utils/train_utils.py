@@ -51,11 +51,11 @@ def _tokenize_veracity(x, **kwargs):
     tokenized  = _tokenize(text=l, **kwargs)
     return tokenized
 
-def test_hf_trainer(trainer, test_dataset, save_dir):
-    test_res = trainer.predict(test_dataset, metric_key_prefix="test")
+def test_hf_trainer(trainer, test_dataset, save_dir, prefix="test"):
+    test_res = trainer.predict(test_dataset, metric_key_prefix=prefix)
     test_metrics = test_res.metrics
 
-    with open(os.path.join(save_dir, "test_metrics.json"), "w") as fp:
+    with open(os.path.join(save_dir, f"{prefix}_metrics.json"), "w") as fp:
         json.dump(test_metrics, fp)
 
 # def _tokenize_veracity_with_special(x):

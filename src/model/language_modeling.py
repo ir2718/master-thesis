@@ -14,6 +14,7 @@ from src.heads.electra import ElectraLMHead
 from src.heads.whole_word_mlm import WholeWordMaskedLMHead
 from src.heads.shuffle_random import ShuffleRandomLMHead
 from src.heads.selective_mlm import SelectiveMaskedLMHead
+from src.heads.selective_mlm_with_important_word_detection import SelectiveMaskedLMWithImportantWordDetectionHead
 from tqdm import tqdm
 import os
 import torch
@@ -26,6 +27,7 @@ def get_LM_head(model_name, pretrain_type):
         "wwm_electra": ElectraLMHead,
         "shuffle_random": ShuffleRandomLMHead,
         "selective_mlm": SelectiveMaskedLMHead,
+        "selective_mlm_with_word_detection": SelectiveMaskedLMWithImportantWordDetectionHead,
     }
     return d[pretrain_type]
 
@@ -108,6 +110,11 @@ class PretrainingModel(nn.Module):
             "loss": []
         }
 
+    def aggregate_losses(self, loss):
+        if isinstance(loss, tuple) != 0:
+            return torch.sum(torch.stack([l.mean() for l in loss]))
+        return loss.mean()
+
     def train_loop(self, num_steps, train_loader, validation_loader, optimizer, scheduler, gradient_accumulation_steps):        
 
         self.gradient_accumulation_steps = gradient_accumulation_steps
@@ -130,7 +137,7 @@ class PretrainingModel(nn.Module):
 
             for batch in train_loader:
                 outputs, labels, loss = self._forward_batch(batch)
-                loss = loss.mean() / gradient_accumulation_steps
+                loss = self.aggregate_losses(loss) / gradient_accumulation_steps
                 loss.backward()
                 total_loss += loss
 
@@ -193,9 +200,25 @@ class PretrainingModel(nn.Module):
         with torch.no_grad():
             for batch in tqdm(validation_loader):
                 outputs, labels, loss = self._forward_batch(batch)
-                val_losses.extend(loss.cpu().detach().tolist())
 
-            print(f"Val loss: {torch.mean(torch.tensor(val_losses))}")
+                # in case the loss consists of multiple components, calculate the mean for each component and then sum all components
+                # this is a must for electra pretraining
+                if isinstance(loss, tuple):
+                    if len(val_losses) == 0:
+                        for i, k in enumerate(loss):
+                            val_losses.append(k.detach().cpu().tolist())
+                    else:
+                        for i, k in enumerate(loss):
+                            val_losses[i].extend(k.detach().cpu().tolist())
+                else:
+                    val_losses.extend(loss.detach().cpu().tolist())
+
+        if isinstance(loss, tuple):
+            val_loss = torch.sum(torch.stack([torch.mean(torch.tensor(l)) for l in val_losses]))
+        else:
+            val_loss = torch.mean(torch.tensor(val_losses))
+
+        print(f"Val loss: {val_loss}")
 
         self.train()
         
@@ -207,7 +230,7 @@ class PretrainingModel(nn.Module):
         print("------------------------------------")
         print()
 
-        self.val_metrics["loss"].append(torch.tensor(val_losses).mean().item())
+        self.val_metrics["loss"].append(val_loss.item())
 
     def log(self, step, loss):
         print()

@@ -77,4 +77,6 @@ test_dataloader = DataLoader(
     collate_fn=c.collate_fn
 )
 model = model.load_best_model()
+model.test(train_dataloader, prefix="train")
+model.test(validation_dataloader, prefix="validation")
 model.test(test_dataloader)

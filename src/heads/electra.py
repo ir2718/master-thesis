@@ -142,7 +142,6 @@ class ElectraLMHead(BaseLMHead):
     def _generate_new_tokens_logits(self, inputs):
         inputs = batch_to_device(inputs, self.device)
         out = self.gen_head(**inputs).logits
-        inputs = batch_to_device(inputs, "cpu")
         return inputs, out
 
     def mask_tokens(self, inputs):
@@ -162,47 +161,56 @@ class ElectraLMHead(BaseLMHead):
             padding_value=self.tokenizer.pad_token_id
         )
 
+
+        original = inputs["input_ids"].detach().clone()
         # mask 85% * 15% tokens tokens
         inputs_masked, labels, indices_replaced = self._mask_tokens(
             inputs["input_ids"], batch_mask
         )
-        # possible optimization: filter all examples where labels in row are all false
-        # these dont have to go through the generator at all
+        indices_replaced = indices_replaced.to(self.device)
 
-        
         # create example for discriminator
         input_to_gen = inputs.copy()
         input_to_gen["input_ids"] = inputs_masked
 
         # run generator forward pass
         inputs_new, gen_out = self._generate_new_tokens_logits(input_to_gen)
-        self.gen_out = gen_out.cpu()
-        self.gen_labels = labels.clone()
+        self.gen_out = gen_out
 
-        tokens_new, labels_new = self._sample_tokens(inputs_new, labels, indices_replaced)
+        labels = labels.to(self.device)
+        gen_labels = torch.full_like(labels, -100).to(self.device)
+        gen_labels[indices_replaced] = labels[indices_replaced]
+        self.gen_labels = gen_labels.to(self.device) # original labels ARE NOT EQUAL TO THIS
+
+        tokens_new, labels_new = self._sample_tokens(inputs_new, indices_replaced)
 
         # get mask for [PAD] tokens and fill labels with -100 where [PAD] token was
         # these tokens aren't calculated in loss
+        generated_inputs = inputs_new.copy()
+        generated_inputs["input_ids"] = tokens_new
         padding_mask = torch.ones_like(labels_new).bool()
-        padding_mask[inputs_new["input_ids"] != self.tokenizer.pad_token_id] = False
+        padding_mask[generated_inputs["input_ids"] != self.tokenizer.pad_token_id] = False
         labels_new.masked_fill_(padding_mask.bool(), -100)
         
-        return inputs_new, labels_new
+        return tokens_new, labels_new
 
-    def _sample_tokens(self, inputs_new, labels, indices_replaced):
+    def _sample_tokens(self, inputs_new, indices_replaced):
         
         with torch.no_grad():
             # sample new tokens using gumbel softmax
             gen_out_masked = self.gen_out[indices_replaced, :]
-            preds = (gen_out_masked + self.gumbel.sample(gen_out_masked.shape)).argmax(dim=-1)
+            uniform_noise = torch.rand_like(gen_out_masked)
+            gumbel_noise = -torch.log(-torch.log(uniform_noise + 1e-9) + 1e-9)
+            probabilities = torch.nn.functional.softmax(gen_out_masked + gumbel_noise, dim=-1)
+            preds = probabilities.argmax(dim=-1)
             generated = inputs_new["input_ids"].clone()
-
             generated[indices_replaced] = preds
             
             # produce labels for discriminator
-            # loss isnt calculated on tokens that the generator guessed
+            # loss isnt calculated on tokens that the generator guessed correctly
             is_replaced = indices_replaced.clone()
-            is_replaced[indices_replaced] = (preds != labels[indices_replaced])
+            # if the predictions ARE NOT correct theyre replaced by 1, otherwise its 0
+            is_replaced[indices_replaced] = (preds != self.gen_labels[indices_replaced])
 
         return generated, is_replaced.float()
 
@@ -210,16 +218,20 @@ class ElectraLMHead(BaseLMHead):
         # calculate generator loss only over tokens different from the original
         gen_out_flat = self.gen_out.view(-1, self.tokenizer.vocab_size)
         gen_label_flat = self.gen_labels.view(-1)
-        gen_loss = cross_entropy(gen_out_flat, gen_label_flat, ignore_index=-100)
+        gen_mask = gen_label_flat != -100
+        gen_loss = cross_entropy(
+            gen_out_flat[gen_mask], gen_label_flat[gen_mask], ignore_index=-100, reduction="none"
+        )
 
         # calculate discriminator loss only over masked tokens
         mask = y != -100
-        disc_loss = binary_cross_entropy_with_logits(x[mask], y[mask])
+        disc_loss = binary_cross_entropy_with_logits(x[mask], y[mask], reduction="none")
 
         # the original paper uses gen_weight=1.0 and disc_weight=50.0
-        total_loss = ElectraLMHead.GEN_WEIGHT * gen_loss + ElectraLMHead.DISC_WEIGHT * disc_loss
+        gen_loss = ElectraLMHead.GEN_WEIGHT * gen_loss
+        disc_loss = ElectraLMHead.DISC_WEIGHT * disc_loss
         
-        return total_loss
+        return (gen_loss, disc_loss)
 
     def save_head(self, step, save_path):
         torch.save(self.gen_head, os.path.join(save_path, f"mlm_head_{step}"))

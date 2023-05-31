@@ -1,11 +1,9 @@
 from transformers import set_seed, TrainingArguments, Trainer, DataCollatorWithPadding
 import os
-from accelerate import Accelerator
 from src.parser.parser import parse_finetune_baseline
 from src.utils.model_utils import load_hf_model
 from src.utils.train_utils import get_compute_metrics, tokenize_dataset, test_hf_trainer
 from src.utils.data_utils import get_dataset, get_num_labels
-import json
 
 args = parse_finetune_baseline()
 set_seed(args.seed)

@@ -51,7 +51,10 @@ class WholeWordMaskedLMHead(BaseLMHead):
                 token in [".", "!", "?", "...", ","]:
                 cand_indexes.append([i])
             else:
-                cand_indexes[-1].append(i)
+                if i > 0 and input_tokens[i-1].endswith("\""):
+                    cand_indexes.append([i])
+                else:
+                    cand_indexes[-1].append(i)
 
         return cand_indexes
 

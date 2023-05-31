@@ -124,8 +124,16 @@ class FinetuningCollator:
         self.tokenizer = AutoTokenizer.from_pretrained(model, config=self.config)
         
     def collate_fn(self, examples):
+        if isinstance(examples[0][0], tuple):
+            exs = []
+            for x, _ in examples:
+                s = x[0] + f" {self.tokenizer.sep_token} " + f" {self.tokenizer.sep_token} ".join(x[1])
+                exs.append(s)
+        else:
+            exs = [x for x, _ in examples]
+
         tokenized_examples = self.tokenizer(
-            [ex for ex, _ in examples], padding=True, truncation=True, return_tensors="pt"
+            exs, padding=True, truncation=True, return_tensors="pt"
         )
         return tokenized_examples, torch.tensor([label for _, label in examples])
 

@@ -4,7 +4,8 @@ from transformers import (
     AutoTokenizer,
     AutoModelForMaskedLM,
 )
-from torch.nn.functional import cross_entropy
+from copy import deepcopy
+from torch.nn.functional import cross_entropy, binary_cross_entropy_with_logits
 import torch.nn as nn
 import torch
 import os
@@ -12,7 +13,9 @@ from spacy import load, prefer_gpu
 import random
 
 
-class SelectiveMaskedLMHead(BaseLMHead):
+class SelectiveMaskedLMWithImportantWordDetectionHead(BaseLMHead):
+
+    NUM_IMPORTANT_WORD_CLASSES = 2
 
     def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
@@ -29,11 +32,26 @@ class SelectiveMaskedLMHead(BaseLMHead):
         print(f"Spacy using gpu: {prefer_gpu()}")
         
         if head_model_name == "bert-base-cased":
-            self.head = self.head.cls.to(self.device)
+            self.important_word_head = deepcopy(self.head).cls
+            self.important_word_head.predictions.decoder = nn.Linear(
+                in_features=self.important_word_head.predictions.decoder.in_features,
+                out_features=SelectiveMaskedLMWithImportantWordDetectionHead.NUM_IMPORTANT_WORD_CLASSES,
+            )
+            self.head = self.head.to(self.device)
+            self.important_word_head = self.important_word_head.to(self.device)
+
         elif head_model_name == "roberta-base":
-            self.head = self.head.lm_head.to(self.device)
+            self.important_word_head = deepcopy(self.head).lm_head
+            self.important_word_head.decoder = nn.Linear(
+                in_features=self.important_word_head.decoder.in_features,
+                out_features=SelectiveMaskedLMWithImportantWordDetectionHead.NUM_IMPORTANT_WORD_CLASSES,
+            )
+            
+            self.head = self.head.to(self.device)
+            self.important_word_head = self.important_word_head.to(self.device)
 
         if distributed:
+            self.important_word_head = nn.DataParallel(self.head)
             self.head = nn.DataParallel(self.head)
 
         self.wwm_probability = 0.15
@@ -78,19 +96,22 @@ class SelectiveMaskedLMHead(BaseLMHead):
 
     def _find_words_of_interest(self, text):
         indices, words_of_interest = [], []
+        
         for i, token in enumerate(self.spacy_model(text)):
             # check if its a named entity, number, predicate, subject or object
             if token.ent_type_ != "" or token.like_num \
                 or (token.dep_ == "ROOT" and token.pos_ == "VERB") \
-                or (token.dep_ in ["nsubj", "csubj", "nsubjpass"]) \
-                or (token.dep_ in ["dobj", "iobj", "pobj"]) \
-                or (token.dep_ in ["acomp", "xcomp", "ccomp", "pcomp"]):
+                or ("subj" in token.dep_) \
+                or ("obj" in token.dep_) \
+                or (token.dep_ in ["xcomp", "ccomp"]):
                 indices.append(i+1) # add one because of [CLS] token
                 words_of_interest.append(token.text)
+
         return indices, words_of_interest
 
     def _group_subwords_roberta(self, input_tokens, indices, words_of_interest):
         cand_indexes_selected, cand_indexes_other = [], []
+        word_detection_labels = []
         len_selected = 0
 
         punctuation = [".", "!", "?", "...", ","]
@@ -102,6 +123,7 @@ class SelectiveMaskedLMHead(BaseLMHead):
             token = input_tokens[i]
 
             if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
+                word_detection_labels.append(-100)
                 i += 1
                 continue
 
@@ -129,19 +151,22 @@ class SelectiveMaskedLMHead(BaseLMHead):
                 if full_word in words_of_interest:
                     cand_indexes_selected.append(word_indices)
                     len_selected += len(word_tokens)
+                    word_detection_labels.extend([1 for i in word_indices])
                     indices = indices[1:]
                 else:
                     cand_indexes_other.append(word_indices)
+                    word_detection_labels.extend([0 for i in word_indices])
                 
                 i = j
+
+        self.all_word_detection_labels.append(word_detection_labels)
 
         return cand_indexes_selected, cand_indexes_other, len_selected
     
     def _group_subwords_bert(self, input_tokens, indices, words_of_interest):
         cand_indexes_selected, cand_indexes_other = [], []
+        word_detection_labels = []
         len_selected = 0
-
-        punctuation = [".", "!", "?", "...", ","]
 
         # go over all the tokens in the input sequence
         num_tokens = len(input_tokens)
@@ -150,6 +175,7 @@ class SelectiveMaskedLMHead(BaseLMHead):
             token = input_tokens[i]
 
             if token == self.tokenizer.cls_token or token == self.tokenizer.sep_token:
+                word_detection_labels.append(-100)
                 i += 1
                 continue
 
@@ -173,15 +199,18 @@ class SelectiveMaskedLMHead(BaseLMHead):
                 if full_word in words_of_interest:
                     cand_indexes_selected.append(word_indices)
                     len_selected += len(word_tokens)
+                    word_detection_labels.extend([1 for i in word_indices])
                     indices = indices[1:]
                 else:
                     cand_indexes_other.append(word_indices)
+                    word_detection_labels.extend([0 for i in word_indices])
                 
                 i = j
 
+        self.all_word_detection_labels.append(word_detection_labels)
+
         return cand_indexes_selected, cand_indexes_other, len_selected
 
-    
     def _group_subwords(self, input_tokens, indices, words_of_interest):
         if self.head_model_name == "bert-base-cased":
             return self._group_subwords_bert(input_tokens, indices, words_of_interest)
@@ -277,9 +306,10 @@ class SelectiveMaskedLMHead(BaseLMHead):
             raise ValueError("Length of covered_indexes is not equal to length of masked_lms.")
         
         return [1 if i in covered_indexes else 0 for i in range(len(input_tokens))]
-
+    
     def mask_tokens(self, inputs):
         mask_labels = []
+        self.all_word_detection_labels = []
         for i in inputs["input_ids"]:
             ref_tokens = []
 
@@ -297,6 +327,8 @@ class SelectiveMaskedLMHead(BaseLMHead):
 
         input_ids_new, labels = self._mask_tokens(inputs["input_ids"], batch_mask)
         inputs["input_ids"] = input_ids_new
+
+        self.all_word_detection_labels = torch.tensor(self.all_word_detection_labels)
 
         return inputs, labels
 
@@ -337,7 +369,11 @@ class SelectiveMaskedLMHead(BaseLMHead):
         # 10% of the time do nothing
         return inputs, labels
 
-    # the default loss function for masked language modeling
+    def forward(self, x):
+        self.important_word_head_out = self.important_word_head(x)
+        out = self.head(x)
+        return out
+
     def get_loss(self, x, y):
         x_view = x.view(-1, self.tokenizer.vocab_size)
         y_view = y.view(-1)
@@ -350,7 +386,12 @@ class SelectiveMaskedLMHead(BaseLMHead):
         masked_lm_loss = cross_entropy(
             x_selected, y_selected, reduction="none"
         )
-        return masked_lm_loss
+
+        x_view_word = x
+
+        word_detection_loss = 0
+
+        return masked_lm_loss + 0
     
     def save_head(self, step, save_path):
         torch.save(self.head, os.path.join(save_path, f"mlm_head_{step}"))
