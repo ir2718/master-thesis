@@ -1,13 +1,11 @@
 import torch
 import torch.nn as nn
 from transformers import (
-    ElectraConfig,
     AutoTokenizer,
     AutoConfig,
     AutoModel,
     AutoModelForSequenceClassification
 )
-from transformers.models.bert.modeling_bert import BertPooler
 from abc import abstractmethod
 from src.utils.train_utils import compute_metrics, compute_metrics_multiclass, batch_to_device
 import numpy as np
@@ -19,7 +17,7 @@ class FinetuneModel(nn.Module):
 
     MAX_GRAD_NORM = 1.0
 
-    def __init__(self, model, model_path, num_epochs, experiment_name, metric, num_labels, device, distributed):
+    def __init__(self, model, model_path, num_epochs, experiment_name, metric, num_labels, device, distributed, not_pretrained, loss_weights, load_only_model):
         super().__init__()
         self.num_epochs = num_epochs
         self.experiment_name = experiment_name
@@ -29,8 +27,20 @@ class FinetuneModel(nn.Module):
         self.save_dir = os.path.join("models", "pretrained_finetuned")
 
         self.config = AutoConfig.from_pretrained(model)
-        self.tokenizer = AutoTokenizer.from_pretrained(model)        
-        self.model = torch.load(model_path).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+
+        if not_pretrained:
+            self.model = AutoModel.from_config(config=self.config)
+        else:
+            if model_path is None:
+                if model not in ["google/electra-base-discriminator"]:
+                    self.model = AutoModel.from_pretrained(model, add_pooling_layer=False)
+                else:
+                    self.model = AutoModel.from_pretrained(model)
+            else:
+                self.model = torch.load(model_path).to(self.device)
+                if load_only_model:
+                    self.model = self.model.model
 
         self.num_labels = num_labels
 
@@ -46,13 +56,20 @@ class FinetuneModel(nn.Module):
         self.cls = nn.Sequential(*cls_head)
 
         if self.distributed:
-            self.model = torch.nn.DataParallel(self.model)
-            self.cls = torch.nn.DataParallel(self.cls)
+            self.model = torch.nn.DataParallel(self.model).to(device)
+            self.cls = torch.nn.DataParallel(self.cls).to(device)
         else:
             self.model = self.model.to(device)
             self.cls = self.cls.to(device)
 
-        self.loss = nn.CrossEntropyLoss()
+        if loss_weights is None:
+            self.loss = nn.CrossEntropyLoss()
+        else:
+            weight = loss_weights.sum()/loss_weights
+            #weight = weight * 1 / weight.mean()
+            weight = weight.to(self.device)
+            self.loss = nn.CrossEntropyLoss(weight=weight)
+
         self.compute_metrics = compute_metrics if self.num_labels == 1 else compute_metrics_multiclass
 
         self.callbacks = []
@@ -65,8 +82,8 @@ class FinetuneModel(nn.Module):
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def set_callbacks(self, callbacks):
-        self.callbacks = callbacks
+    def set_callback(self, callback):
+        self.callbacks.append(callback)
     
     def forward(self, x):
         out = self.model(**x).last_hidden_state
@@ -86,6 +103,13 @@ class FinetuneModel(nn.Module):
             "accuracy": [], "f1": [], "precision": [], "recall": [], "loss":[]
         }
 
+    def resize_token_embeddings(self, new_len):
+        if self.distributed:
+            self.model.module.resize_token_embeddings(new_len)
+            #self.model = torch.nn.DataParallel(self.model)
+        else:
+            self.model.resize_token_embeddings(new_len)
+
     def train_loop(self, train_dataloader, validation_dataloader, num_epochs, gradient_accumulation_steps):
         self.train()
         self.init_metric_dict()
@@ -94,16 +118,15 @@ class FinetuneModel(nn.Module):
         step, total_loss = 0, 0.0
         pbar = tqdm(total=num_epochs * len(train_dataloader))
         for e in range(num_epochs):
-
+            
             for c in self.callbacks:
                 c.on_epoch_begin()
 
             for i, b in enumerate(train_dataloader):
                 tokenized_texts, labels = b
 
-                if not self.distributed:
-                    tokenized_texts = batch_to_device(tokenized_texts, self.device)
-                    labels = labels.to(self.device).long()
+                tokenized_texts = batch_to_device(tokenized_texts, self.device)
+                labels = labels.to(self.device).long()
 
                 out = self.forward(tokenized_texts)
 
@@ -179,11 +202,11 @@ class FinetuneModel(nn.Module):
         for b in dataloader:
             tokenized_texts, labels_step = b
 
-            if not self.distributed:
-                tokenized_texts = batch_to_device(tokenized_texts, self.device)
-                labels_step = labels_step.to(self.device).long()
+            tokenized_texts = batch_to_device(tokenized_texts, self.device)
+            labels_step = labels_step.to(self.device).long()
 
             out = self.forward(tokenized_texts)
+            
             loss = self.loss(out, labels_step)
             losses.append(loss.cpu().detach().item())
 

@@ -49,6 +49,13 @@ trainer.train()
 
 test_hf_trainer(
     trainer=trainer,
+    test_dataset=dataset_dict["train"], 
+    save_dir=save_dir,
+    prefix="train"
+)
+
+test_hf_trainer(
+    trainer=trainer,
     test_dataset=dataset_dict["test"], 
     save_dir=save_dir
 )

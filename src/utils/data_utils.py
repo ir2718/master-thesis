@@ -5,9 +5,7 @@ from transformers import (
     AutoTokenizer,
     AutoConfig
 )
-import numpy as np
-from torch.nn.utils.rnn import pad_sequence
-from ast import literal_eval
+import spacy
 import torch
 
 # every dataset is loaded as a huggingface dataset
@@ -119,28 +117,52 @@ class PretrainingCollator:
         return tokenized_examples
 
 class FinetuningCollator:
-    def __init__(self, model):
-        self.config = AutoConfig.from_pretrained(model)
-        self.tokenizer = AutoTokenizer.from_pretrained(model, config=self.config)
+    def __init__(self, model, model_tag, add_important_word_token=False):
+        self.config = AutoConfig.from_pretrained(model_tag)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_tag, config=self.config)
         
+        self.add_important_word_token = add_important_word_token
+        if self.add_important_word_token:
+            self.special_token = "[IMPORTANT]"
+            special_tokens_dict = {'additional_special_tokens': [self.special_token]}
+            num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
+            model.resize_token_embeddings(len(self.tokenizer))
+            print(f"Spacy using GPU: {spacy.require_gpu()}")
+            self.spacy_model = spacy.load("en_core_web_lg")
+
     def collate_fn(self, examples):
         if isinstance(examples[0][0], tuple):
             exs = []
             for x, _ in examples:
+                if self.add_important_word_token:
+                    x = [
+                        self.find_and_add_important_word_tokens(x[0]), 
+                        [self.find_and_add_important_word_tokens(i) for i in x[1]]
+                    ]
                 s = x[0] + f" {self.tokenizer.sep_token} " + f" {self.tokenizer.sep_token} ".join(x[1])
                 exs.append(s)
         else:
-            exs = [x for x, _ in examples]
+            exs = []
+            for x, _ in examples:
+                if self.add_important_word_token:
+                    x = self.find_and_add_important_word_tokens(x)
+                exs.append(x)
 
         tokenized_examples = self.tokenizer(
             exs, padding=True, truncation=True, return_tensors="pt"
         )
         return tokenized_examples, torch.tensor([label for _, label in examples])
-
-if __name__ == "__main__": # for testing
-    #d =_load_CT23_dataset()
-    #d =_load_CT21_dataset()
-    #d = _load_FEVER_dataset()
-    d = _load_climate_FEVER_dataset()
-    print(d)
     
+    def find_and_add_important_word_tokens(self, x):
+        tokenized = self.spacy_model(x)
+        retokenized = []
+        for token in tokenized:
+            retokenized.append(token.text)
+            if token.ent_type_ != "" or token.like_num \
+                or (token.dep_ == "ROOT" and token.pos_ == "VERB") \
+                or ("subj" in token.dep_) \
+                or ("obj" in token.dep_) \
+                or (token.dep_ in ["xcomp", "ccomp"]):
+                retokenized.append(self.special_token)
+        final_str = " ".join(retokenized)
+        return final_str

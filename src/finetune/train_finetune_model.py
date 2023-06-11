@@ -1,5 +1,5 @@
 from transformers import set_seed
-from src.utils.model_utils import get_optimizer, get_scheduler
+from src.utils.model_utils import get_optimizer, get_scheduler, get_callback
 from src.finetune.finetune_model import FinetuneModel
 from src.parser.parser import parse_finetune_model
 from src.data.dataset import get_finetuning_dataset
@@ -8,10 +8,7 @@ from torch.utils.data import DataLoader
 import torch
 
 args = parse_finetune_model()
-if args.device_id is not None:
-    device = f"cuda:{args.device_id}"
-else:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
 set_seed(args.seed)
 
 dataset_constructor = get_finetuning_dataset(args.dataset)
@@ -33,10 +30,18 @@ model = FinetuneModel(
     metric=args.metric,
     num_labels=num_labels,
     device=device, 
-    distributed=args.distributed
+    distributed=args.distributed,
+    not_pretrained=args.not_pretrained,
+    loss_weights=train_dataset.calculate_weights() if args.weighted_loss else None,
+    load_only_model=args.load_only_model
 )
 
-c = FinetuningCollator(model=args.model)
+c = FinetuningCollator(
+    model=model,
+    model_tag=args.model,
+    add_important_word_token=args.important_word_token
+)
+
 train_dataloader = DataLoader(
     train_dataset, 
     batch_size=args.train_batch_size, 

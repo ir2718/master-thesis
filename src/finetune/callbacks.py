@@ -40,3 +40,49 @@ class FrozenHeadCallback(BaseEpochCallback):
 
                 for p in self.model.model.parameters():
                     p.requires_grad = True
+
+
+class GradualUnfreezingHeadCallback(BaseEpochCallback):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.curr_epoch = 0
+        self.curr_layer_to_unfreeze = 12
+
+    def on_epoch_begin(self):
+        if self.curr_epoch == 0:
+
+            for p in self.model.parameters():
+                p.requires_grad = False
+
+            if hasattr(self.model, "pooler"):
+                for p in self.pooler.parameters():
+                    p.requires_grad = False
+
+            for p in self.cls.parameters():
+                p.requires_grad = True
+
+        elif self.curr_epoch == 1:
+
+            if hasattr(self.model, "pooler"):
+                for p in self.pooler.parameters():
+                    p.requires_grad = True
+
+        else:
+            
+            if self.curr_layer_to_unfreeze > 0:
+
+                for p in self.model.encoder.layer[self.curr_layer_to_unfreeze]:
+                    p.requires_grad = True
+
+                for p in self.model.encoder.layer[self.curr_layer_to_unfreeze-1]:
+                    p.requires_grad = True
+
+                self.curr_layer_to_unfreeze -= 2
+
+            else:
+                
+                for p in self.model.embeddings:
+                    p.requires_grad = True
+
+        self.curr_epoch += 1

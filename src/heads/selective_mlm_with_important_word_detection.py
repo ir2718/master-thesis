@@ -15,7 +15,7 @@ import random
 
 class SelectiveMaskedLMWithImportantWordDetectionHead(BaseLMHead):
 
-    NUM_IMPORTANT_WORD_CLASSES = 2
+    NUM_IMPORTANT_WORD_CLASSES = 1
 
     def __init__(self, multi_task_model, head_model_name, device, distributed, **kwargs):
         super().__init__(head_model_name, **kwargs)
@@ -27,7 +27,7 @@ class SelectiveMaskedLMWithImportantWordDetectionHead(BaseLMHead):
             head_model_name,
             config=self.config
         )
-        
+
         self.spacy_model = load("en_core_web_lg")
         print(f"Spacy using gpu: {prefer_gpu()}")
         
@@ -37,21 +37,21 @@ class SelectiveMaskedLMWithImportantWordDetectionHead(BaseLMHead):
                 in_features=self.important_word_head.predictions.decoder.in_features,
                 out_features=SelectiveMaskedLMWithImportantWordDetectionHead.NUM_IMPORTANT_WORD_CLASSES,
             )
-            self.head = self.head.to(self.device)
+            self.head = self.head.cls.to(self.device)
             self.important_word_head = self.important_word_head.to(self.device)
 
         elif head_model_name == "roberta-base":
-            self.important_word_head = deepcopy(self.head).lm_head
+            self.important_word_head = deepcopy(self.head.lm_head)
             self.important_word_head.decoder = nn.Linear(
                 in_features=self.important_word_head.decoder.in_features,
                 out_features=SelectiveMaskedLMWithImportantWordDetectionHead.NUM_IMPORTANT_WORD_CLASSES,
             )
             
-            self.head = self.head.to(self.device)
+            self.head = self.head.lm_head.to(self.device)
             self.important_word_head = self.important_word_head.to(self.device)
 
         if distributed:
-            self.important_word_head = nn.DataParallel(self.head)
+            self.important_word_head = nn.DataParallel(self.important_word_head)
             self.head = nn.DataParallel(self.head)
 
         self.wwm_probability = 0.15
@@ -387,11 +387,17 @@ class SelectiveMaskedLMWithImportantWordDetectionHead(BaseLMHead):
             x_selected, y_selected, reduction="none"
         )
 
-        x_view_word = x
+        all_word_detection_labels_flat = self.all_word_detection_labels.view(-1) 
+        word_mask = all_word_detection_labels_flat != -100
+        y_selected_word = all_word_detection_labels_flat[word_mask].to(self.device).float()
+        x_word = self.important_word_head_out.view(-1)
+        x_selected_word = x_word[word_mask]
 
-        word_detection_loss = 0
+        word_detection_loss = binary_cross_entropy_with_logits(
+            x_selected_word, y_selected_word, reduction="none"
+        )
 
-        return masked_lm_loss + 0
+        return (masked_lm_loss, word_detection_loss)
     
     def save_head(self, step, save_path):
         torch.save(self.head, os.path.join(save_path, f"mlm_head_{step}"))

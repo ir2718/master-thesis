@@ -49,7 +49,9 @@ def parse_finetune_baseline():
 def parse_finetune_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="bert-base-cased")
-    parser.add_argument("--model_path", type=str, default="./pretrained_models/wwm_mlm_bert_CT23/1499/backbone_wwm_mlm_bert_CT23_1499")
+    parser.add_argument("--model_path", default=None)
+    parser.add_argument("--callback", default=None)
+    parser.add_argument("--important_word_token", action="store_true")
     parser.add_argument("--dataset", type=str, default="CT23") # CT23, FEVER
     parser.add_argument("--experiment_name", type=str, default="experiment")
     parser.add_argument("--num_epochs", type=int, default=10)
@@ -63,8 +65,10 @@ def parse_finetune_model():
     parser.add_argument("--metric", type=str, default="f1") # f1, accuracy
     parser.add_argument("--warmup_ratio", type=str, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device_id", default=None)
     parser.add_argument("--distributed", action="store_true")
+    parser.add_argument("--not_pretrained", action="store_true")
+    parser.add_argument("--weighted_loss", action="store_true")
+    parser.add_argument("--load_only_model", action="store_true")
     args = parser.parse_args()
     return args
 

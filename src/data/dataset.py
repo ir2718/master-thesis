@@ -31,6 +31,9 @@ class BaseDataset(Dataset):
         self.dataset = data.to_pandas()
         self.has_label = "label" in self.dataset.columns.tolist()
 
+    def calculate_weights(self):
+        return torch.tensor(self.dataset["label"].value_counts().tolist())
+
     def __len__(self):
         return self.dataset.shape[0]
     

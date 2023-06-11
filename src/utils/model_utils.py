@@ -1,11 +1,23 @@
 from transformers import AutoModelForSequenceClassification, AutoConfig, AutoTokenizer
 from torch.optim import AdamW
+from src.finetune.callbacks import (
+    FrozenHeadCallback, 
+    GradualUnfreezingHeadCallback,
+    GradualUnfreezingHeadCallback,
+)
 from transformers import (
     get_cosine_schedule_with_warmup, 
     get_linear_schedule_with_warmup
 )
 import os
 import json
+
+def get_callback(name, model_tag):
+    if name == "frozen":
+        return FrozenHeadCallback
+
+    if model_tag in ["bert-base-cased", "roberta-base", "google/electra-base-discriminator"]:
+        return GradualUnfreezingHeadCallback
 
 def _find_best_hf_ckpt(path):
     files = [os.path.join(path, i) for i in os.listdir()]
