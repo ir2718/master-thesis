@@ -29,26 +29,8 @@ The subtasks needed to solve this problem:
        - using attention weights, logic-based explanation or summarization by generating explanations
        
 ### Datasets
-- only checkworthiness and verification will be covered in this thesis
 - checkworthiness:
   1. CLEF2023 CheckThat! Task 1: Check-Worthiness in Multimodal and Unimodal Content (CT23)
-  2. CLEF2021 CheckThat! Task 1: Check-Worthiness Estimation (CT21)
 
 - verification:
   1. FEVER
-  2. Climate FEVER
-  
-### Baselines:
-- each baseline was trained on 20 epochs
-
-| Model     | Dataset         | learning rate | batch size | weight decay | F1 score | Best @ epoch |
-| --------- | --------------- | ------------- | ---------- | ------------ | -------- | ------------ |
-| BERT      | CT23            | 2e-5          | 32         | 1e-2         | 0.758    | 19           |
-| RoBERTa   | CT23            | 2e-5          | 32         | 1e-2         | 0.770    | 4            |
-| BERT      | CT21            | 2e-5          | 32         | 1e-2         | 0.701    | 8            |
-| RoBERTa   | CT21            | 2e-5          | 32         | 1e-2         | 0.758    | 7            |
-| BERT      | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
-| RoBERTa   | FEVER           | 2e-5          | 32         | 1e-2         |          |              |
-| BERT      | Climate FEVER   | 2e-5          | 32         | 1e-2         |          |              |
-| RoBERTa   | Climate FEVER   | 2e-5          | 32         | 1e-2         |          |              |
-
