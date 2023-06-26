@@ -33,4 +33,4 @@ The subtasks needed to solve this problem:
   1. CLEF2023 CheckThat! Task 1: Check-Worthiness in Multimodal and Unimodal Content (CT23)
 
 - verification:
-  1. FEVER
+  1. FEVER with generated adversarial claims
