@@ -241,6 +241,9 @@ Out of the chosen 15% of the tokens:
 - other occasionally occuring mode is lack of specifity when referring to a group
   - "Many of your Democrat Governors said" - which governors is it referring to?
 
+![TSNE CT23 plot for BERT baseline](figures/tsne_original.png)
+![TSNE CT23 plot for adaptively pretrained BERT](figures/tsne_adaptive.png)
+
 **FEVER & BERT baseline**
 | Rank | Claim | Evidence | Label |
 | ---- | ----- | -------- | ----- |
@@ -265,6 +268,9 @@ Out of the chosen 15% of the tokens:
   - 160 kills are confirmed by the Pentagon, but the claim uses 170 which is very close
   - the prediction for the example is NOT ENOUGH INFO
   - the inclusion of the NOT ENOUGH INFO class might actually pose problems in borderline cases
+
+![TSNE FEVER plot for BERT baseline](figures/tsne_original_fever.png)
+![TSNE FEVER plot for adaptively pretrained BERT](figures/tsne_adaptive_fever.png)
 
 ## Future work
 - pretraining from scratch
